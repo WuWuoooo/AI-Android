@@ -1,0 +1,32 @@
+# Built artifacts
+build/
+local.properties
+*.iml
+.idea/
+*.apk
+*.aab
+*.ap_
+*.dex
+release/
+
+# Gradle
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android / IDE
+.DS_Store
+captures/
+.externalNativeBuild
+.cxx/
+*.log
+androidTestResult/
+
+# Keystore / secrets (never commit)
+*.jks
+*.keystore
+keystore.properties
+signingConfigs/
+
+# Project-specific caches
+.acside/
+app/build/
