@@ -31,10 +31,6 @@
 - **悬浮窗常驻 + 关闭按钮**：
   - `FloatingService.finishWork` 不再 5s 后自动 `stop`；AI 完成后悬浮球常驻，直到用户手动点「✕ 关闭悬浮窗」或 App 被系统回收
   - 面板新增「✕ 关闭悬浮窗」按钮（红字，位于「暂停 AI」下方）
-- **PTY 完整终端接入指南**（`docs/PTY-终端接入指南.md`）：
-  - 说明 com.termux:terminal-view 两个源码模块的获取（官方仓库 `termux/termux-app`，方式 A 本地源码 / 方式 B JitPack）
-  - 给出 `TerminalSession` 替换 `ProcessBuilder` 的伪代码、`TerminalView` 在 Compose `AndroidView` 里的接入示例
-  - 列出 4 项 TTY / 渲染 / 信号 / 作业 + 宽字符的完整验收清单（tty→/dev/pts/N、stty size、echo $- 含 i、sleep 100 + Ctrl-C → $?=130、jobs/fg/bg、vim/top、中文/emoji）
 
 ### Fixed（修复）
 - **悬浮窗 AI 完成后拖不动 bug**：
@@ -56,9 +52,6 @@
 - **完整 PTY 终端已接入（`terminal-emulator` + `terminal-view` 两模块）**，`libtermux.so` 由 NDK r29 在构建时编译。
   设置里「完整 PTY 终端」开关**默认关闭**——关闭时终端走稳定的管道版（Ctrl 按钮 / 重启会话 / 清屏 / 键盘跟随，AI 工具亦走此），
   打开后终端屏切换为真 pty（Ctrl-C/D/Z 真信号、jobs/fg/bg、vim/top、ANSI 彩色、宽字符）。
-  若 NDK 版本与 `terminal-emulator/build.gradle` 里的 `ndkVersion` 不一致导致 native 编译失败，
-  请改该版本号或删掉它、在 `local.properties` 写 `ndk.dir=` 指向你的 NDK；详见 `docs/PTY-终端接入指南.md`
-- 不预装逆向工具（jadx/apktool/baksmali/ghidra）；pkg / apt 工具优化靠 ProotRunner env + 国内 apt 源 + 二进制识别
 
 ## [1.0.0-beta5] - 2026-10-04
 **versionCode 6**
