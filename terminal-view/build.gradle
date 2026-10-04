@@ -1,0 +1,26 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+        namespace "com.termux.view"
+    compileSdk 34
+
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 34
+        // ⭐ consumer rules（AGP 8.1：consumerProguardFiles 属于 defaultConfig，不是 android 顶层）
+        consumerProguardFiles "proguard-rules.pro"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation "androidx.annotation:annotation:1.9.0"
+    // terminal-view 依赖 terminal-emulator（API 传递，使使用方能拿到 TerminalSession 等）
+    api project(":terminal-emulator")
+}

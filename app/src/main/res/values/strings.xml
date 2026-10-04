@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ai Android</string>
+    <string name="accessibility_service_description">允许「Ai Android」读取屏幕内容并模拟点击、输入、滑动等手势，用于帮您自动操作手机应用。所有数据仅在本机处理，不会上传。</string>
+</resources>

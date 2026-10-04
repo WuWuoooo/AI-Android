@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace "com.termux.emulator"
+    compileSdk 34
+
+        // ⭐ 显式指定 NDK r29（与用户本地已安装版本一致；AGP 据此编译 libtermux.so）。
+    // ⚠️ 若编译报 "NDK ... not found / incompatible"，请核对 Android Studio → SDK Manager →
+    //    NDK (Side by side) 里 r29 的完整版本号，替换下面这行；
+    //    或删掉本行、改在 local.properties 写 ndk.dir=/你的NDK绝对路径。
+    ndkVersion = "29.0.14206865"
+
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 34
+        // ⭐ consumer rules（AGP 8.1：consumerProguardFiles 属于 defaultConfig，不是 android 顶层）
+        consumerProguardFiles "proguard-rules.pro"
+        externalNativeBuild {
+            ndkBuild {
+                // 去掉 -Werror：避免不同 NDK 版本的新告警被当成错误导致编译失败
+                cFlags "-std=c11", "-Wall", "-Wextra", "-Os", "-fno-stack-protector", "-Wl,--gc-sections"
+            }
+        }
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path "src/main/jni/Android.mk"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation "androidx.annotation:annotation:1.9.0"
+}
