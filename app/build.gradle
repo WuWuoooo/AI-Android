@@ -1,0 +1,110 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.kapt'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+    // ⚠️ Kotlin 1.9.x 用 composeOptions 配置 Compose Compiler，
+    //   不需要 plugin.compose（那是 2.0+ 的东西）
+}
+
+android {
+    namespace 'com.ai.android'
+    compileSdk 34
+
+// ⭐ 让 AGP 把 .so 解压到磁盘（默认 targetSdk 30+ 是从 APK mmap，不做磁盘文件）
+packaging {
+    jniLibs {
+        useLegacyPackaging = true
+    }
+}
+
+    defaultConfig {
+                applicationId "com.ai.android"
+        minSdkVersion 24
+        targetSdkVersion 34
+                                versionCode 8
+        versionName "1.1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+        freeCompilerArgs += ['-Xskip-metadata-version-check']
+    }
+
+    // ⭐ 关键：用 aaptOptions（AGP 8.1.4 里 aaptOptions 更可靠）
+    aaptOptions {
+        noCompress 'zip'
+        noCompress 'jar'
+        noCompress 'proot'
+        noCompress 'bin'
+    }
+
+        buildFeatures {
+        compose true
+        buildConfig true
+        // ⭐ v1.1.0 #2：Shizuku 用户服务（以 shell uid 2000 执行命令）需要 AIDL
+        aidl true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion "1.5.8"
+    }
+}
+
+dependencies {
+    // AndroidX Core
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.activity:activity-compose:1.9.0'
+
+    // ⭐ PTY 终端（com.termux:terminal-view + terminal-emulator，含 native libtermux.so）
+    implementation project(':terminal-view')
+
+    // Compose
+    implementation 'androidx.compose.ui:ui:1.7.0'
+    implementation 'androidx.compose.ui:ui-tooling-preview:1.7.0'
+    implementation 'androidx.compose.foundation:foundation:1.7.0'
+    implementation 'androidx.compose.material3:material3:1.3.0'
+    implementation 'androidx.compose.material:material-icons-extended:1.7.0'
+    implementation 'androidx.navigation:navigation-compose:2.7.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.3'
+    debugImplementation 'androidx.compose.ui:ui-tooling:1.7.0'
+
+    // Room
+    implementation 'androidx.room:room-runtime:2.6.1'
+    implementation 'androidx.room:room-ktx:2.6.1'
+    kapt 'androidx.room:room-compiler:2.6.1'
+
+    // 网络
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.squareup.okhttp3:okhttp-sse:4.12.0'
+
+    // 协程
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    // JSON
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3'
+
+    // 图片
+    implementation 'io.coil-kt:coil-compose:2.6.0'
+
+        // LaTeX
+    implementation 'ru.noties:jlatexmath-android:0.2.0'
+
+        // ⭐ v1.1.0 #2：Shizuku 提权（宿主侧 = api + provider；shizuku-service 是 Shizuku 服务端模块，宿主不引）
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+}

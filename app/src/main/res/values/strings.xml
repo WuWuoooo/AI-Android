@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ai Android</string>
+    <string name="accessibility_service_description">允许「Ai Android」读取屏幕内容并模拟点击、输入、滑动等手势，用于帮您自动操作手机应用。所有数据仅在本机处理，不会上传。</string>
+
+    <!-- ==================== 设置页（Settings）==================== -->
+    <string name="set_title">设置</string>
+    <string name="back">返回</string>
+    <string name="set_section_provider">模型服务（Provider）</string>
+    <string name="set_section_multimodal">多模态能力绑定</string>
+    <string name="set_section_agent">Agent 参数</string>
+    <string name="set_section_ai_behavior">AI 行为</string>
+    <string name="set_section_readlimit">文件读取</string>
+    <string name="set_section_termux">Termux 环境</string>
+    <string name="set_section_terminal">终端环境</string>
+    <string name="set_section_display">显示</string>
+    <string name="set_section_project">项目文件夹</string>
+    <string name="set_section_memory">长期记忆</string>
+    <string name="set_section_aicontrol">AI 操控</string>
+    <string name="set_section_shizuku">Shizuku 权限</string>
+    <string name="set_section_token">Token 统计</string>
+    <string name="set_section_plugin">插件管理</string>
+    <string name="set_section_language">语言</string>
+    <string name="set_section_permission">权限</string>
+    <string name="set_add_provider">＋ 添加 Provider</string>
+    <string name="set_cancel">取消</string>
+    <string name="set_save">保存</string>
+
+    <!-- 设置：文件读取 -->
+    <string name="readlimit_title">AI 读取文件最大字符数</string>
+    <string name="readlimit_desc">超过此长度会被截断。设为 0 表示不限制（大文件可能超出模型上下文）。</string>
+    <string name="readlimit_none">不限</string>
+
+    <!-- 设置：Termux 环境 -->
+    <string name="termux_title">Termux 环境（pkg / apt / python）</string>
+    <string name="termux_desc">安装后可在内置终端使用 Termux 生态（pkg install xxx、pip、apt 等）。首次安装约 30MB，耗时 10-30 秒。</string>
+    <string name="termux_install">安装 Termux 环境</string>
+    <string name="termux_installing">安装中…</string>
+    <string name="termux_uninstall">卸载</string>
+
+    <!-- 设置：终端环境 -->
+    <string name="terminal_title">终端环境</string>
+    <string name="terminal_desc">把 Termux 的 $PREFIX/bin 路径填到 PATH 前缀，即可在内置终端使用 pkg / pip / apt 等命令。</string>
+    <string name="terminal_pty">完整 PTY 终端（默认开启）</string>
+    <string name="terminal_pty_desc">终端 + AI 走真 pty，支持 Ctrl-C/D/Z 真信号、jobs/fg/bg、vim/top、ANSI 彩色、宽字符。关闭则回退到稳定管道版。</string>
+    <string name="terminal_home">HOME 目录</string>
+    <string name="terminal_path">PATH 前缀（: 分隔）</string>
+    <string name="terminal_init">启动初始化脚本（每行一条命令）</string>
+
+    <!-- 设置：悬浮窗 -->
+    <string name="floating_title">后台悬浮球</string>
+    <string name="floating_desc">Agent 运行时在屏幕边缘显示状态小球，点击展开查看进度</string>
+
+    <!-- 设置：项目 -->
+    <string name="project_desc">把相关会话归入项目文件夹，方便分类管理。</string>
+    <string name="project_empty">（暂无项目）</string>
+    <string name="project_new">新建项目</string>
+    <string name="project_name">项目名</string>
+    <string name="project_rename">重命名项目</string>
+    <string name="project_unnamed">未命名项目</string>
+    <string name="project_create">创建</string>
+    <string name="rename">重命名</string>
+    <string name="delete">删除</string>
+
+    <!-- 设置：长期记忆 -->
+    <string name="memory_desc">AI 通过 save_memory 工具自动写入，也可手动添加。跨会话保留。</string>
+    <string name="memory_empty">（暂无记忆）</string>
+    <string name="memory_add">手动添加</string>
+    <string name="memory_add_title">添加记忆</string>
+    <string name="memory_key">标识（英文短词）</string>
+    <string name="memory_content">内容</string>
+
+    <!-- 设置：AI 行为 -->
+    <string name="ai_behavior_title">对话与标题</string>
+    <string name="auto_title">AI 自动总结标题</string>
+    <string name="auto_title_desc">第一轮对话结束后由 AI 并发总结一个简短标题（不阻塞回复）</string>
+
+    <!-- 设置：AI 操控 -->
+    <string name="ai_control_title">AI 操控手机（后台操作 + 实时镜像）</string>
+    <string name="ai_control_desc">AI 用无障碍服务在后台操控真机，不影响你正常使用其他 App；操控期间可开启实时镜像小窗围观画面。</string>
+    <string name="ai_control_toggle">允许 AI 后台操控</string>
+    <string name="ai_control_toggle_desc">关闭后 accessibility_control 工具会被拒绝</string>
+    <string name="ai_control_mirror">操控时显示镜像小窗</string>
+    <string name="ai_control_mirror_desc">需悬浮窗权限；无权限时退化为仅通知栏提示</string>
+    <string name="ai_control_confirm">操控前需要确认</string>
+    <string name="ai_control_confirm_desc">开启后每次操控前会先弹窗征得你同意</string>
+    <string name="ai_control_not_enabled">⚠️ 无障碍服务尚未开启，请先在系统设置中授权</string>
+    <string name="a11y_guide_title">需要开启无障碍服务</string>
+    <string name="a11y_guide_body">AI 后台操控依赖 Android 无障碍服务。请完成以下操作：\n1. 点击「去系统设置」\n2. 找到「Ai Android 手机操控」\n3. 打开开关并允许无障碍权限\n4. 返回本 App 即可正常使用</string>
+    <string name="a11y_guide_go">去系统设置</string>
+    <string name="a11y_guide_later">稍后再说</string>
+
+    <!-- 设置：Token 统计 -->
+    <string name="token_title">当前对话 Token 累计</string>
+    <string name="token_desc">数据来源：对话中所有 assistant 消息的 tokenStats 求和</string>
+    <string name="token_input">输入</string>
+    <string name="token_output">输出</string>
+    <string name="token_cache">缓存</string>
+    <string name="token_total">总消耗</string>
+    <string name="token_export">导出 Token 统计</string>
+    <string name="token_clear">清除统计</string>
+
+    <!-- 设置：插件管理 -->
+    <string name="plugin_title">外部插件（静态挂件）</string>
+    <string name="plugin_desc">导入 .zip 挂件包（manifest.json + 图标），在悬浮窗显示。JS 动态挂件 beta6 落地。</string>
+    <string name="plugin_import">＋ 导入插件 .zip</string>
+    <string name="plugin_empty">（未导入任何插件）</string>
+
+    <!-- 设置：权限 -->
+    <string name="perm_storage">存储权限（文件读写）</string>
+    <string name="perm_notification">通知权限（任务提醒）</string>
+    <string name="perm_overlay">悬浮窗（后台状态球）</string>
+    <string name="perm_accessibility">无障碍服务（手机操控）</string>
+    <string name="perm_granted">已开启</string>
+    <string name="perm_ungranted">未开启</string>
+    <string name="perm_go">去开启</string>
+
+    <!-- 设置：语言 / 语言包 -->
+    <string name="lang_title">语言 / Language</string>
+    <string name="lang_desc">切换界面语言；导入自定义 .json 语言包可覆盖指定文案。切换即时生效，重启后保留。</string>
+    <string name="lang_import_pack">＋ 导入语言包 .json</string>
+    <string name="lang_remove_pack">清除自定义语言包</string>
+    <string name="lang_follow">跟随系统</string>
+    <string name="lang_pack_imported">语言包已导入</string>
+    <string name="lang_pack_failed">语言包导入失败（需为 key→翻译 的 JSON 对象）</string>
+    <string name="lang_pack_cleared">已清除语言包</string>
+
+    <!-- 设置：Shizuku -->
+    <string name="shizuku_title">Shizuku 提权</string>
+    <string name="shizuku_desc">让 AI 经 Shizuku（ADB/root）以 shell 身份运行命令，突破 app 沙箱读写 Android/data。</string>
+    <string name="shizuku_not_installed">未安装 Shizuku（功能不可用，自动回退 app 沙箱）</string>
+    <string name="shizuku_installed">已安装 Shizuku</string>
+    <string name="shizuku_granted">已授权，shell 提权可用</string>
+    <string name="shizuku_request">请求授权</string>
+    <string name="shizuku_running_as">运行身份：shell (uid 2000)</string>
+
+        <!-- 设置：Provider 编辑 -->
+    <string name="provider_new_title">添加 Provider</string>
+    <string name="provider_edit_title">编辑 Provider</string>
+    <string name="provider_name">名称</string>
+    <string name="provider_baseurl">Base URL</string>
+    <string name="provider_key">API Key</string>
+    <string name="provider_model">模型名</string>
+    <string name="provider_caps">支持的能力</string>
+    <string name="provider_openai">OpenAI 兼容</string>
+    <string name="provider_anthropic">Anthropic</string>
+        <string name="provider_no_key">未填 API Key</string>
+    <string name="provider_key_prefix">Key</string>
+    <string name="provider_unnamed">未命名</string>
+    <string name="provider_caps_title">支持的能力</string>
+
+        <!-- 设置：多模态绑定 -->
+    <string name="multimodal_desc">为每种能力指定使用的 Provider。未指定时自动选择 active 或第一个具备该能力的 Provider。</string>
+    <string name="multimodal_search">当前搜索</string>
+    <string name="multimodal_auto">自动</string>
+    <string name="multimodal_none">（无 Provider 支持）</string>
+    <string name="mm_image">文生图</string>
+    <string name="mm_vision">识图</string>
+    <string name="mm_tts">语音合成</string>
+    <string name="mm_asr">语音识别</string>
+    <string name="mm_search">联网搜索</string>
+    <string name="mm_call">音视频通话</string>
+    <string name="toast_switched">已切换到</string>
+
+    <!-- 设置：请求参数（逐条添加）-->
+    <string name="param_title">请求参数（逐条添加）</string>
+    <string name="param_desc">新手不用写 JSON：点下方预设一键添加，或「＋ 添加」逐条填 键 / 值 / 类型。保存时自动拼成请求体 JSON；老手可展开「高级 JSON」直接编辑，两者互通不丢数据。</string>
+    <string name="param_empty">（暂无自定义参数）</string>
+    <string name="param_add">＋ 添加参数</string>
+    <string name="param_key">键 (key)</string>
+    <string name="param_value">值</string>
+    <string name="param_adv">请求体设置（高级）</string>
+    <string name="param_json_label">自定义请求体 JSON</string>
+    <string name="param_sync">把 JSON 同步为逐条参数</string>
+    <string name="param_headers_label">自定义请求头（每行 Key: Value）</string>
+    <string name="param_merge_hint">请求体 JSON 会 merge 进每次请求；键冲突时以你填的为准。直接编辑 JSON 后点上方「同步」可回填到逐条参数，保存时两者一致。</string>
+
+    <!-- 设置：Agent 参数 -->
+    <string name="agent_max_rounds">最大工具循环</string>
+    <string name="agent_temperature">温度</string>
+    <string name="agent_retries">流式/HTTP 失败自动重试</string>
+    <string name="agent_compress">上下文自动压缩</string>
+    <string name="agent_compress_desc">超过设定轮次后自动总结旧轮次、压缩上下文，避免对话过长导致请求 400 / 超上下文。</string>
+        <string name="agent_reasoning">推理强度</string>
+    <string name="agent_reasoning_default">默认</string>
+    <string name="agent_reasoning_low">低</string>
+    <string name="agent_reasoning_medium">中</string>
+    <string name="agent_reasoning_high">高</string>
+    <string name="agent_prompt_title">自定义系统提示词</string>
+    <string name="agent_prompt_unset">自定义系统提示词：未设置</string>
+    <string name="agent_prompt_edit">编辑</string>
+    <string name="agent_prompt_example">例如：我是学生，请用简单语言回答…</string>
+    <string name="agent_rounds_times">次</string>
+
+    <!-- 设置：Token 统计 toast -->
+    <string name="token_none">当前对话没有可导出的 Token 统计</string>
+    <string name="token_exported">Token 统计已导出</string>
+    <string name="token_export_failed">导出失败：%1$s</string>
+    <string name="token_cleared">已清除当前对话的 Token 统计</string>
+
+    <!-- ==================== 聊天（Chat）==================== -->
+    <string name="chat_default_title">AI Android</string>
+    <string name="chat_unconfigured">未配置模型</string>
+    <string name="chat_empty_title">AI Android</string>
+    <string name="chat_empty_sub">运行在手机上的 AI Agent</string>
+    <string name="chat_empty_hint">可以帮你：整理文件 · 执行终端命令 · 联网搜索 · 定时任务 · 操控其他 App</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_stop">停止</string>
+    <string name="chat_input_placeholder">输入指令…</string>
+    <string name="chat_working">Agent 工作中…</string>
+    <string name="chat_new">新会话</string>
+    <string name="chat_conversations">对话列表</string>
+    <string name="chat_settings">设置</string>
+    <string name="chat_terminal">终端</string>
+    <string name="chat_add">添加附件</string>
+    <string name="chat_pick_file">选择文件</string>
+    <string name="chat_pick_image">选择图片</string>
+    <string name="chat_voice_call">语音通话（GLM-4-Voice）</string>
+    <string name="chat_video_call">视频通话（GLM-Realtime）</string>
+    <string name="chat_quote">引用</string>
+    <string name="chat_copied">已复制</string>
+    <string name="chat_quoted">已引用</string>
+    <string name="chat_selected">已选</string>
+    <string name="chat_items">条</string>
+    <string name="chat_delete">删除</string>
+    <string name="chat_cancel">取消</string>
+    <string name="chat_ask_title">Agent 提问</string>
+    <string name="chat_ask_reply">回复</string>
+    <string name="chat_ask_skip">跳过</string>
+    <string name="chat_ask_input">或输入回答…</string>
+    <string name="chat_tts_notready">TTS 未就绪</string>
+
+    <!-- 气泡菜单 / 工具条 -->
+    <string name="menu_edit">修改</string>
+    <string name="menu_delete">删除</string>
+    <string name="menu_multi">多选</string>
+    <string name="menu_copy">复制</string>
+    <string name="menu_select_text">选择文本</string>
+    <string name="menu_selecting">选择此条</string>
+    <string name="menu_edit_title">修改消息</string>
+    <string name="menu_edit_desc">「保存」仅改显示、不重新生成；「保存并重新生成」会用新内容重发此条并让 AI 重新回答。</string>
+    <string name="menu_edit_save">保存</string>
+    <string name="menu_edit_resend">保存并重新生成</string>
+    <string name="menu_edit_placeholder">输入要显示的内容…</string>
+    <string name="menu_delete_title">删除消息</string>
+    <string name="menu_delete_confirm">确定删除这条消息吗？（不可恢复）</string>
+    <string name="menu_finish_select">完成选择</string>
+    <string name="bubble_quoted">引用</string>
+    <string name="toolbar_quote">引用追问</string>
+    <string name="toolbar_speak">朗读</string>
+    <string name="toolbar_copy">复制</string>
+    <string name="toolbar_retry">重新生成</string>
+    <string name="toolbar_more">更多</string>
+    <string name="toolbar_continue">▶ 继续生成</string>
+    <string name="toolbar_none">（无更多操作）</string>
+    <string name="reasoning_title">💭 思考过程</string>
+    <string name="reasoning_streaming">生成中…</string>
+    <string name="image_label">图片</string>
+
+    <!-- ==================== 终端（Terminal）==================== -->
+    <string name="term_title">终端</string>
+    <string name="term_pty_title">终端 (PTY)</string>
+    <string name="term_bound">绑定当前对话</string>
+    <string name="term_default">默认</string>
+    <string name="term_copy">复制</string>
+    <string name="term_copied">已复制终端输出</string>
+    <string name="term_ready">（终端已就绪，下方输入命令，回车执行；输入 clear 清屏）</string>
+    <string name="term_running">▍执行中…</string>
+    <string name="term_clear">清屏</string>
+    <string name="term_restart">重启</string>
+    <string name="term_pty_unavailable">PTY 终端不可用</string>
+    <string name="term_pty_unavailable_desc">（proot 未安装或会话未建）</string>
+
+    <!-- ==================== 对话列表（Conversations）==================== -->
+    <string name="conv_title">对话</string>
+    <string name="conv_import">导入对话</string>
+    <string name="conv_new">新会话</string>
+    <string name="conv_pin">置顶</string>
+    <string name="conv_unpin">取消置顶</string>
+    <string name="conv_export">导出对话</string>
+    <string name="conv_token_stats">查看 Token 统计</string>
+
+    <!-- ==================== 通话（Call）==================== -->
+    <string name="call_voice">语音通话</string>
+    <string name="call_video">视频通话</string>
+</resources>
