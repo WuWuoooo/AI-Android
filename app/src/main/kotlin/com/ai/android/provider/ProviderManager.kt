@@ -228,10 +228,12 @@ class ProviderManager {
             },
 
             // ---------- 系统 ----------
-                        fn(
+                                    fn(
                 "run_shell_command",
                 "执行**一次性** shell 命令并等待结果（超时最长 60s）。适合快速、短小、无副作用的命令。" +
-                    "长任务/装包(pip/apt/pkg)/跑 Python 脚本 超过 60s 请用 terminal_exec（上限 120s，且后台继续运行，不杀进程）。",
+                    "长任务/装包(pip/apt/pkg)/跑 Python 脚本 超过 60s 请用 terminal_exec（上限 120s，且后台继续运行，不杀进程）。" +
+                    "注意：Shizuku(uid 2000) 与 Termux(u0_a348) 是**不同 uid 沙箱**，涉及 Termux 内部目录" +
+                    "（/data/data/com.termux）或杀 Termux 进程必须走 terminal_exec，本工具无法跨 uid 操作。",
                 """{"command":"ls /sdcard/Download","timeout_sec":15}""",
                 listOf("command"),
             ) {
@@ -247,20 +249,49 @@ class ProviderManager {
                 s("code", "JS 代码，用 __send(结果) 返回", required = true)
                 i("timeout_sec", "超时秒数，默认 15，最大 60")
             },
-            fn(
+                        fn(
                 "terminal_exec",
                 "在**常驻终端**执行命令（跨调用保持工作目录/环境）。适合：装包(pkg/apt)、跑 Python、长时间任务。" +
-                    "如果超时，命令仍在后台跑，用 terminal_read 读取后续输出。",
-                """{"command":"pkg install python -y","timeout_sec":60}""",
+                    "如果超时，命令仍在后台跑，用 terminal_read 读取后续输出。" +
+                    "传 background=true 则命令立即后台化，返回 task id，不阻塞后续工具调用（适合 for sleep / 长轮询等），" +
+                    "之后用 terminal_read_bg 按 task 读输出，或用 terminal_wait 非阻塞等待结束。",
+                """{"command":"pkg install python -y","timeout_sec":60,"background":false}""",
                 listOf("command"),
             ) {
                 s("command", "sh 语法命令", required = true)
-                                i("timeout_sec", "等待超时秒数，默认 60，最大 120（超时后命令仍在后台运行，可用 terminal_read 读后续输出）")
+                i("timeout_sec", "等待超时秒数，默认 60，最大 120（background=true 时忽略）")
+                b("background", "true=立即后台化并返回 task id（不阻塞）；默认 false 阻塞等待")
             },
-                        fn("terminal_read", "读取内置终端最近 N 行输出。", """{"lines":50,"since_last":true}""") {
+            fn("terminal_read", "读取内置终端最近 N 行输出。", """{"lines":50,"since_last":true}""") {
                 i("lines", "读取行数，默认 40，最大 500")
                 b("since_last", "true=只返回上次读取后新增的输出（避免重复读旧内容）")
             },
+            // ⭐ v1.2.0-next #5：后台终端工具
+            fn(
+                "terminal_read_bg",
+                "按 task id 读取 terminal_exec background=true 启动的后台命令输出（不阻塞主终端队列）。",
+                """{"task":"abc123","lines":100}""",
+                listOf("task"),
+            ) {
+                s("task", "后台任务 id（terminal_exec background=true 返回的 task）", required = true)
+                i("lines", "读取日志最近行数，默认 100，最大 500")
+            },
+            fn(
+                "terminal_wait",
+                "非阻塞等待后台任务结束或日志匹配到指定模式（独立线程轮询，不占终端队列）。" +
+                    "适合替代 sleep/长轮询：terminal_exec background=true 后，用本工具等到某模式出现或进程结束。",
+                """{"task":"abc123","pattern":"done","timeout_sec":300}""",
+                listOf("task"),
+            ) {
+                s("task", "后台任务 id（terminal_exec background=true 返回的 task）", required = true)
+                s("pattern", "可选：日志里出现此字符串时立即返回；不填则等到进程结束")
+                i("timeout_sec", "最长等待秒数，默认 300，最大 600")
+            },
+            fn(
+                "terminal_list_bg",
+                "列出当前对话所有后台任务及其存活状态（PTY 重连后可据此汇报哪些任务还活着）。",
+                "{}",
+            ) {},
             fn("get_current_time", "获取当前日期时间（含星期）。无需参数。", "{}"),
 
             // ---------- 网络 ----------
@@ -323,9 +354,17 @@ class ProviderManager {
             fn("read_memory", "读取指定长期记忆。", """{"key":"user_name"}""", listOf("key")) {
                 s("key", "记忆标识", required = true)
             },
-            fn("list_memory", "列出所有长期记忆。", "{}"),
+                        fn("list_memory", "列出所有长期记忆。", "{}"),
+            fn(
+                "delete_memory",
+                "删除指定 key 的长期记忆。⚠️ 不可恢复，删除前建议先 read_memory 确认。",
+                """{"key":"user_name"}""",
+                listOf("key"),
+            ) {
+                s("key", "要删除的记忆标识（与 save_memory/read_memory 的 key 一致）", required = true)
+            },
 
-            // ---------- 交互 ----------
+                        // ---------- 交互 ----------
             fn(
                 "ask_user",
                 "向用户提问并等待回答。**危险操作前必须先调用本工具确认**。",
@@ -334,6 +373,53 @@ class ProviderManager {
             ) {
                 s("question", "要问的问题", required = true)
                 s("options", "可选：逗号分隔的选项，例：确认,取消")
+            },
+
+            // ---------- 多模态（第五轮 Bug 3）----------
+            fn(
+                "generate_image",
+                "用文生图 Provider 生成图片（需已配置 IMAGE 能力）。" +
+                    "返回图片文件路径 + base64 长度。prompt 描述越详细效果越好。",
+                """{"prompt":"一只在草地上奔跑的橘猫","size":"1024x1024"}""",
+                listOf("prompt"),
+            ) {
+                s("prompt", "图片描述（中英文均可，越具体越好）", required = true)
+                s("size", "尺寸，默认 1024x1024，可选 512x512 / 1024x1024 / 1792x1024")
+            },
+            fn(
+                "generate_speech",
+                "用 TTS Provider 将文字合成为语音文件（需已配置 TTS 能力）。" +
+                    "返回 wav 文件路径。voice 可选：Chloe/冰糖/茉莉/苏打/白桦/Mia/Milo/Dean 等。",
+                """{"text":"你好，我是 AI 助手","voice":"Chloe"}""",
+                listOf("text"),
+            ) {
+                                s("text", "要朗读的正文（最多 4096 字符）", required = true)
+                s("voice", "音色，默认 冰糖（中文女声）；可选 茉莉/苏打/白桦/Mia/Chloe/Milo/Dean 等")
+            },
+                                    fn(
+                "analyze_image",
+                "用识图（VISION）Provider 分析图片（需已配置 VISION 能力）。" +
+                    "传 image_base64 或 image_path（二选一）+ 问题，返回文字描述。",
+                """{"image_path":"/sdcard/Pictures/cat.jpg","question":"这是什么猫？"}""",
+                emptyList(),
+            ) {
+                s("image_path", "图片文件绝对路径（与 image_base64 二选一）")
+                s("image_base64", "图片 base64 字符串（与 image_path 二选一）")
+                s("question", "针对图片的问题，默认：请描述这张图片的内容")
+            },
+
+            // ---------- 项目记忆（第五轮 #4）----------
+            fn(
+                "project_memory",
+                "管理**当前对话所属项目**的独立项目记忆（与全局长期记忆分开存）。" +
+                    "action=list 列全部 / save 写一条(需 key+content) / read 读一条(需 key) / delete 删一条(需 key)。" +
+                    "仅当当前对话已归入某个项目时可用；项目记忆会自动注入到该项目的对话上下文里。",
+                """{"action":"save","key":"goal","content":"本项目目标是…"}""",
+                listOf("action"),
+            ) {
+                enumOf("action", "动作", listOf("list", "save", "read", "delete"))
+                s("key", "记忆标识（save/read/delete 必填），英文短词，例如 goal")
+                s("content", "要保存的内容（save 必填）")
             },
         )
     }

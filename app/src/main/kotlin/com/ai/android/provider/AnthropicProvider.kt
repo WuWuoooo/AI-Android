@@ -189,11 +189,16 @@ class AnthropicProvider(
                 blocks.remove(idx)?.takeIf { it.name.isNotEmpty() }?.let { completed.add(it) }
             }
 
-            "message_delta" -> {
+                        "message_delta" -> {
                 usage.completion = root["usage"]?.let { u ->
                     runCatching { u.jsonObject["output_tokens"]?.jsonPrimitive?.intOrNull }.getOrNull()
                 } ?: usage.completion
-                if (root["delta"]?.let { runCatching { it.jsonObject["stop_reason"] }.getOrNull() } != null) {
+                val stopReason = root["delta"]?.let {
+                    runCatching { it.jsonObject["stop_reason"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                }
+                if (stopReason != null) {
+                    // ⭐ v1.2.0 #2：发 finish_reason（Anthropic stop_reason：end_turn / max_tokens / tool_use）
+                    scope.trySend(StreamEvent.FinishInfo(stopReason))
                     emitFinal(scope, blocks, completed)
                 }
                 scope.trySend(StreamEvent.Stats(

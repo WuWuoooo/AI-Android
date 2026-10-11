@@ -20,6 +20,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -80,12 +81,19 @@ class FloatingService : Service() {
     private lateinit var mirrorView: ImageView
     private lateinit var mirrorCaption: TextView
     private lateinit var tokenText: TextView
-    private lateinit var pauseBtn: TextView
+        private lateinit var pauseBtn: TextView
     private lateinit var closeBtn: TextView   // ⭐ 关闭悬浮窗按钮
 
-    /** 插件挂件（球旁的静态图标） */
+    // ==================== ⭐ v1.2.0 #7.2：悬浮窗内直接回复 Agent ====================
+    private lateinit var replyInput: EditText
+    private lateinit var replySendBtn: TextView
+
+        /** 插件挂件（球旁的静态图标） */
     private val pluginWidgetViews = mutableListOf<View>()
     private val pluginSlots = mutableListOf<WidgetSlot>()
+
+    // ==================== ⭐ v1.2.0 #7.1：JS 插件动态挂件（原生 View 呈现）====================
+    private val jsWidgetViews = mutableListOf<View>()
 
     /** 实时输出缓冲（保留尾部，防内存膨胀） */
     @Volatile private var reasoningBuffer = ""
@@ -261,12 +269,14 @@ class FloatingService : Service() {
         renderPluginWidgets()
 
                 // ---- 面板 ----
-        panelView = LinearLayout(this).apply {
+                panelView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // ⭐ 默认 AndLua 白卡（圆角 + 白底）；THEME 插件可改色
             val bg = GradientDrawable()
             bg.cornerRadius = dp(s.cornerRadius).toFloat()
             bg.setColor(s.panelBg)
+            // ⭐ v1.2.0 #7.3：描边层级（比背景稍深的 1dp 边，营造卡片悬浮感）
+            bg.setStroke(dp(1), s.divider)
             background = bg
             setPadding(dp(12), dp(10), dp(12), dp(10))
             visibility = View.GONE
@@ -357,7 +367,7 @@ class FloatingService : Service() {
             setOnClickListener { MainApp.instance.agentStopCallback?.invoke() }
         }
 
-                panelView.addView(titleBar)
+                        panelView.addView(titleBar)
         panelView.addView(realTimeScroll)
         panelView.addView(toolText)
         panelView.addView(timeText)
@@ -366,7 +376,79 @@ class FloatingService : Service() {
         panelView.addView(mirrorCaption)
         panelView.addView(pauseBtn)
 
-                // ⭐ 关闭悬浮窗按钮（常驻直到用户手动关闭或 App 被杀）
+        // ==================== ⭐ v1.2.0 #7.2：悬浮窗内直接回复 Agent ====================
+        // 输入框 + 发送按钮：在 App 任何界面（甚至其它 App 前台）直接给 Agent 发指令，
+        // 复用 MainViewModel.send（经 AgentBridge 跨界面共享）。
+        val s7 = style()
+                replyInput = EditText(this).apply {
+            hint = "回复 AI…"
+            textSize = 12f
+            setTextColor(s7.panelText)
+            setHintTextColor(s7.panelTextSecondary)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            maxLines = 2
+            minLines = 1
+                        setPadding(dp(8), dp(5), dp(8), dp(5))
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(s7.panelBg)
+                setStroke(dp(1), s7.divider)   // 用描边把输入区与面板区分开
+            }
+            background = bg
+            isFocusableInTouchMode = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(6) }
+        }
+
+        // ⭐ overlay 默认 FLAG_NOT_FOCUSABLE 无法弹键盘：输入框获焦时临时去掉该 flag，
+        //    失焦时恢复（保证拖动 / 点击其它 view 不受影响）。
+        replyInput.setOnFocusChangeListener { _, hasFocus ->
+            val p = params ?: return@setOnFocusChangeListener
+            val root = rootView ?: return@setOnFocusChangeListener
+            val newFlags = if (hasFocus)
+                p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            else
+                p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            if (newFlags != p.flags) {
+                p.flags = newFlags
+                runCatching { wm?.updateViewLayout(root, p) }
+            }
+        }
+
+        replySendBtn = TextView(this).apply {
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(s7.ballText)
+            text = "发送"
+            isClickable = true
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(s7.ballBg)
+            }
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setOnClickListener {
+                val txt = replyInput.text.toString().trim()
+                if (txt.isEmpty()) return@setOnClickListener
+                replyInput.setText("")
+                // 跨界面/跨进程发给 Agent（同进程共享 MainViewModel）
+                com.ai.android.AgentBridge.postMessage(txt)
+            }
+        }
+
+                val replyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val inputLp = LinearLayout.LayoutParams(0, -2, 1f)
+            inputLp.setMargins(0, 0, dp(6), 0)
+            addView(replyInput, inputLp)
+            addView(replySendBtn)
+        }
+        panelView.addView(replyRow)
+
+        // ⭐ 关闭悬浮窗按钮（常驻直到用户手动关闭或 App 被杀）
         closeBtn = TextView(this).apply {
             textSize = 12f
             gravity = Gravity.CENTER
@@ -655,10 +737,17 @@ class FloatingService : Service() {
                 }
                 return true
             }
-            MotionEvent.ACTION_UP -> {
+                        MotionEvent.ACTION_UP -> {
                 val wasMoved = dragMoved
                 dragMoved = false
-                if (!wasMoved) toggleExpand(!expanded)
+                if (!wasMoved) {
+                    // ⭐ v1.2.0-next #1：球点击 → 推事件给 JS 插件 + 展开面板
+                    runCatching { pushBallClickToJs(p.x.toFloat(), p.y.toFloat()) }
+                    toggleExpand(!expanded)
+                } else {
+                    // ⭐ v1.2.0-next #1：球拖拽结束 → 推事件给 JS 插件
+                    runCatching { pushBallDragEndToJs(p.x.toFloat(), p.y.toFloat()) }
+                }
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -669,11 +758,151 @@ class FloatingService : Service() {
         }
     }
 
-    /** 镜像帧到达（MirrorService 推送） */
+        /** 镜像帧到达（MirrorService 推送） */
     private fun showFrame(bmp: Bitmap) {
         handler.post {
             if (!overlayReady) return@post
             mirrorView.setImageBitmap(bmp)
+        }
+    }
+
+    /**
+     * ⭐ v1.2.0 #7.1：JS 插件请求渲染动态挂件 → 用原生 TextView 呈现到球区。
+     *  - 每个 JS 插件最多一个挂件（重复请求替换旧挂件）
+     *  - colorHex 形如 "#2563EB"（可选）；无则用默认球色
+     */
+    fun renderJsWidget(text: String, colorHex: String?) {
+        handler.post {
+            if (!::ballRow.isInitialized) return@post
+            val s = style()
+            // 清掉上一个 JS 挂件（简化：全清；后续可按 pluginId 精确定位）
+            jsWidgetViews.forEach { v -> if (v.parent != null) (v.parent as? ViewGroup)?.removeView(v) }
+            jsWidgetViews.clear()
+                        val color = colorHex?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() } ?: s.ballBg
+            val label2 = text.take(2)
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(color)
+            }
+                        val tv = TextView(this).apply {
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setTextColor(s.ballText)
+                this.text = label2
+                background = bg
+                isClickable = true
+                setOnClickListener { toggleExpand(true) }
+            }
+            tv.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).also {
+                it.setMargins(dp(6), 0, 0, 0)
+            }
+            tv.setOnTouchListener(onDrag)   // ⭐ JS 挂件也可拖 / 点
+            ballRow.addView(tv)
+            jsWidgetViews.add(tv)
+            // 清边避免溢出
+            runCatching { rootView?.post { clampToScreen() } }
+        }
+    }
+
+            // ==================== ⭐ v1.2.0-next #1：JS 插件动态创建/更新悬浮球本身 ====================
+
+    /** 记录当前 JS 球对应的 pluginId（球点击时用来推事件给 JS） */
+    @Volatile private var jsBallPluginId: String? = null
+
+    /**
+     * ⭐ v1.2.0-next #1：JS 插件动态更新悬浮球外观。
+     * 直接改 defaultBall 的文字/颜色/大小/形状（不新建 view，避免 layout 变化导致拖拽偏移）。
+     * json 字段：text/color/size/shape；"remove":true 时调用 [restoreDefaultBall]。
+     */
+    fun applyJsBall(json: kotlinx.serialization.json.JsonObject, pluginId: String) {
+        handler.post {
+            if (!::defaultBall.isInitialized) return@post
+            jsBallPluginId = pluginId
+            val text = json["text"]?.let {
+                if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null
+            } ?: "AI"
+            defaultBall.text = text.take(3)
+
+            json["color"]?.let { colorEl ->
+                if (colorEl is kotlinx.serialization.json.JsonPrimitive) {
+                    runCatching {
+                        defaultBall.background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(android.graphics.Color.parseColor(colorEl.content))
+                        }
+                    }
+                }
+            }
+
+            json["size"]?.let { sizeEl ->
+                if (sizeEl is kotlinx.serialization.json.JsonPrimitive) {
+                    val sz = sizeEl.content.toIntOrNull()?.coerceIn(24, 96) ?: 46
+                    val lp = defaultBall.layoutParams as? LinearLayout.LayoutParams
+                    if (lp != null) {
+                        lp.width = dp(sz); lp.height = dp(sz)
+                        defaultBall.layoutParams = lp
+                    }
+                }
+            }
+
+            json["shape"]?.let { shapeEl ->
+                if (shapeEl is kotlinx.serialization.json.JsonPrimitive) {
+                    val shape = shapeEl.content
+                    val size = (defaultBall.layoutParams as? LinearLayout.LayoutParams)?.width?.let { (it / resources.displayMetrics.density).toInt() } ?: 46
+                    val gd = GradientDrawable()
+                    gd.cornerRadius = when (shape) {
+                        "capsule" -> dp(size).toFloat() / 2f
+                        "rounded" -> dp(size).toFloat() * 0.28f
+                        "square" -> 0f
+                        else -> dp(size).toFloat() / 2f
+                    }
+                    defaultBall.background = gd
+                }
+            }
+            runCatching { rootView?.post { clampToScreen() } }
+        }
+    }
+
+    /** ⭐ v1.2.0-next #1：恢复默认 "AI" 球（JS 球 remove 时调用） */
+    fun restoreDefaultBall() {
+        handler.post {
+            if (!::defaultBall.isInitialized) return@post
+            jsBallPluginId = null
+            val s = style()
+            defaultBall.text = s.ballLabel
+            defaultBall.setTextColor(s.ballText)
+            defaultBall.background = ballDrawable(s)
+            runCatching {
+                val sz = s.ballSize.coerceIn(24, 96)
+                val lp = defaultBall.layoutParams as? LinearLayout.LayoutParams
+                if (lp != null) { lp.width = dp(sz); lp.height = dp(sz) }
+                rootView?.post { clampToScreen() }
+            }
+        }
+    }
+
+    /**
+     * ⭐ v1.2.0-next #1：球点击时向 JS 插件推送事件。
+     * 在 handleDrag 的 ACTION_UP 分支（非拖动 = 点击）里调用。
+     */
+    fun pushBallClickToJs(x: Float, y: Float) {
+        val pid = jsBallPluginId ?: return
+        runCatching {
+            MainApp.instance.jsPluginRuntime.pushBallEvent(
+                pid, "click",
+                """{"x":$x,"y":$y}"""
+            )
+        }
+    }
+
+    /** ⭐ v1.2.0-next #1：球拖拽结束时向 JS 插件推送事件 */
+    fun pushBallDragEndToJs(x: Float, y: Float) {
+        val pid = jsBallPluginId ?: return
+        runCatching {
+            MainApp.instance.jsPluginRuntime.pushBallEvent(
+                pid, "dragEnd",
+                """{"x":$x,"y":$y}"""
+            )
         }
     }
 
@@ -745,9 +974,50 @@ class FloatingService : Service() {
         /** 镜像帧推送入口（MirrorService 调用） */
         fun pushFrame(bmp: Bitmap) { instance?.showFrame(bmp) }
 
-        /** 插件导入 / 启停 / 删除后重建球 + 挂件区（设置页调用） */
+                /** 插件导入 / 启停 / 删除后重建球 + 挂件区（设置页调用） */
         fun rebuildWidgets(context: Context) {
             Handler(Looper.getMainLooper()).post { instance?.rebuildWidgets() }
+        }
+
+        // ==================== ⭐ v1.2.0 #7.1：JS 插件读取宿主数据 ====================
+
+        /** JS 插件 `host.getTokenText()`：当前悬浮窗 Token 文本快照 */
+        fun tokenTextSnapshot(): String =
+            instance?.let { runCatching { it.lastTokenText }.getOrDefault("") } ?: ""
+
+        /** JS 插件 `host.getAgentState()`：当前 Agent 状态（IDLE/THINKING/...） */
+        fun stateSnapshot(): String =
+            instance?.let { runCatching { it.lastState.status.name }.getOrDefault("IDLE") } ?: "IDLE"
+
+                /** ⭐ JS 插件渲染的动态挂件 → 宿主用原生 View 呈现（FloatingService 在 addOverlay 注册） */
+        var jsRenderWidgetHandler: ((pluginId: String, text: String, colorHex: String?) -> Unit)? = null
+
+                /** ⭐ v1.2.0 #7.1：JS 插件请求渲染动态挂件（经原生 View 呈现到球区） */
+        fun pushJsWidget(context: Context, text: String, colorHex: String?) {
+            Handler(Looper.getMainLooper()).post { instance?.renderJsWidget(text, colorHex) }
+        }
+
+                // ==================== ⭐ v1.2.0-next #1：JS 插件动态创建/更新悬浮球本身 ====================
+
+        /**
+         * ⭐ v1.2.0-next #1：JS 插件动态创建/更新悬浮球。
+         * 解析 jsonStr 并重建球外观（替代插件球），事件回调推给 JS。
+         * jsonStr 示例：{"text":"🔥","color":"#FF5722","size":52,"shape":"circle"}
+         * 特殊：{"remove":true} 恢复默认 "AI" 球。
+         */
+        fun renderJsBall(context: Context, pluginId: String, jsonStr: String) {
+            Handler(Looper.getMainLooper()).post {
+                val ins = instance ?: return@post
+                runCatching {
+                    val jsonObj = kotlinx.serialization.json.Json.parseToJsonElement(jsonStr)
+                    if (jsonObj !is kotlinx.serialization.json.JsonObject) return@post
+                    if (jsonObj["remove"]?.let { it is kotlinx.serialization.json.JsonPrimitive && it.content == "true" } == true) {
+                        ins.restoreDefaultBall()
+                        return@post
+                    }
+                    ins.applyJsBall(jsonObj, pluginId)
+                }.onFailure { android.util.Log.w("FloatingService", "renderJsBall parse fail: $jsonStr", it) }
+            }
         }
 
         private fun handlerFor(context: Context) = Handler(Looper.getMainLooper())

@@ -1,5 +1,6 @@
 package com.ai.android.agent
 
+import android.util.Log
 import com.ai.android.model.AgentState
 import com.ai.android.model.ChatMessage
 import com.ai.android.model.Conversation
@@ -43,8 +44,9 @@ class AgentCore(
     private val providers: ProviderManager,
     private val registry: ToolRegistry,
     private val config: () -> AgentConfig = { AgentConfig() },
-    /** ⭐ 每次请求时注入长期记忆到系统提示词 */
-    private val memoryPromptProvider: () -> String = { "" },
+        /** ⭐ 每次请求时注入长期记忆到系统提示词（含该对话所属项目的独立记忆）。
+     *  传 [Conversation] 以便按 projectId 取项目记忆。 */
+    private val memoryPromptProvider: (Conversation) -> String = { "" },
 ) {
 
     /** 上下文自动压缩状态（单次 run 内有效） */
@@ -56,8 +58,8 @@ class AgentCore(
         val comp = CompState()
         try {
             while (true) {
-                round++
-                if (round > cfg.maxRounds) {
+                                round++
+                if (cfg.maxRounds > 0 && round > cfg.maxRounds) {
                     send(AgentEvent.Error("已达到最大循环次数（${cfg.maxRounds}），停止执行"))
                     send(AgentEvent.State(AgentState(status = AgentState.Status.COMPLETED)))
                     break
@@ -78,19 +80,21 @@ class AgentCore(
                     startedAt = System.currentTimeMillis(),
                 )))
 
-                val request = buildRequest(conversation, cfg, comp)
+                                                                var request = buildRequest(conversation, cfg, comp)
                 val content = StringBuilder()
                 val reasoning = StringBuilder()
                 var toolCalls: List<ToolCall> = emptyList()
                 var stats: TokenStats? = null
                 var streamError: String? = null
+                                                var finishReason: String = ""   // 跟踪 finish_reason
+                                var autoContinueRounds = 0      // 自动续写轮次（上限 6）
 
                 var attempt = 0
                 while (true) {
                     content.clear(); reasoning.clear()
-                    toolCalls = emptyList(); stats = null; streamError = null
+                    toolCalls = emptyList(); stats = null; streamError = null; finishReason = ""
 
-                                        provider.chatStream(request, providers.buildTools(), cfg.reasoningEffort, cfg.temperature)
+                    provider.chatStream(request, providers.buildTools(), cfg.reasoningEffort, cfg.temperature)
                         .collect { ev ->
                             when (ev) {
                                 is StreamEvent.Reasoning -> {
@@ -104,9 +108,53 @@ class AgentCore(
                                 is StreamEvent.ToolCalls -> { toolCalls = ev.calls }
                                 is StreamEvent.Stats -> { stats = ev.stats; send(AgentEvent.Stats(ev.stats)) }
                                 is StreamEvent.Error -> streamError = ev.msg
+                                is StreamEvent.FinishInfo -> finishReason = ev.reason
                                 StreamEvent.Done -> Unit
                             }
                         }
+
+                                                            // ⭐ 静默停修复（v2，最终版）：分两类"没说完"信号判定是否自动续写——
+                    //  ① 显式截断（finish_reason=length/max_tokens）→ 必续
+                    //  ② 国产兼容服务（DeepSeek/Kimi/通义）**正常写完也常不发 finish_reason（空串）**：
+                    //     本轮正文 >= 300 字才认为"没说完"→ 续写；模型收到"请继续"后若产出很短（<300）
+                    //     说明其实已说完 → 自然早停，避免反复空转（这就是"看着像又停了"的根因）
+                    //  ③ 正常结束（stop/end_turn/stop_sequence）/ 工具调用（tool_calls/tool_use）→ 有 cleanEnd，不续
+                    val cleanEnd = finishReason in setOf(
+                        "stop", "content_filter", "tool_calls", "function_call",
+                        "end_turn", "stop_sequence", "tool_use",
+                    )
+                    // ⭐ 静默停修复（v2）：
+                    //  - 显式截断（length/max_tokens）→ 必续
+                    //  - 国产服务**漏发 finish_reason**（finishReason 空、无 error、有正文、无工具）：
+                    //    本轮正文 >= 300 字才认为"没说完"→ 续写；
+                    //    模型收到"请继续"后若产出很短/空（<300），说明其实已说完 → 自然早停，不空转。
+                    val explicitTrunc = finishReason == "length" || finishReason == "max_tokens"
+                    val missingSignalButLong = !cleanEnd && streamError == null &&
+                        toolCalls.isEmpty() && content.length >= 300
+                    val shouldContinue = (explicitTrunc || missingSignalButLong) && autoContinueRounds < 6
+                    Log.d("AgentCore", "continue decision: finish='$finishReason' explicit=$explicitTrunc " +
+                        "missingLong=$missingSignalButLong len=${content.length} rounds=$autoContinueRounds → $shouldContinue")
+                    if (shouldContinue) {
+                        autoContinueRounds++
+                        Log.d("AgentCore", "auto-continue round $autoContinueRounds")
+                        // 把已生成的 partial 先存为消息，再发"请继续"指令
+                        val partialMsg = ChatMessage(
+                            role = ChatMessage.Role.ASSISTANT,
+                            content = content.toString(),
+                            reasoning = reasoning.toString(),
+                            toolCalls = toolCalls,
+                            tokenStats = stats,
+                        )
+                        conversation.addMessage(partialMsg)
+                        send(AgentEvent.MessageDone(partialMsg))
+                        // 发"请继续输出剩余内容"作为 user 消息
+                        val contMsg = ChatMessage.user("（请继续输出剩余内容，不要重复已输出的部分）")
+                        conversation.addMessage(contMsg)
+                        send(AgentEvent.ToolMessage(contMsg))
+                        // 更新 request 让下一轮基于新上下文
+                        request = buildRequest(conversation, cfg, comp)
+                        continue
+                    }
 
                     // ⭐ 修复「思考着突然就停下」：流**中途**报错（网络抖动 / SSE 断流 / 5xx）时，
                     //    旧逻辑只要收到过任意增量就放弃整轮 → AI 说到一半戛然而止、不再续写。
@@ -118,7 +166,16 @@ class AgentCore(
                     val isClientError = Regex("""HTTP 4\d\d""").containsMatchIn(err) &&
                         !err.contains("HTTP 408") && !err.contains("HTTP 429")
 
-                    if (isClientError) {
+                                        if (isClientError) {
+                        // ⭐ v1.2.0 #2：4xx（工具结果 400 等）不再静默整轮放弃，
+                        //    保留 partial + 自动重试一次（与断流修复对齐）
+                        if (attempt < 1) {
+                            Log.d("AgentCore", "4xx retry (attempt $attempt, finish=$finishReason): $err")
+                            attempt++
+                            // 重试前清掉本轮已生成的孤儿消息（避免重复 partial）
+                            delay(800L)
+                            continue
+                        }
                         send(AgentEvent.Error(err))
                         send(AgentEvent.State(AgentState(status = AgentState.Status.ERROR)))
                         send(AgentEvent.Done)
@@ -231,7 +288,7 @@ class AgentCore(
                 && it.toolCalls.isEmpty() && it.reasoning.isBlank()) }
             .filter { !(it.role == ChatMessage.Role.TOOL && it.content.isBlank()) }
 
-        val memory = runCatching { memoryPromptProvider() }.getOrDefault("")
+                val memory = runCatching { memoryPromptProvider(conversation) }.getOrDefault("")
 
         val continueInstruction = buildSystemPrompt("", "", memory) +
             "\n\n【继续生成任务】\n" +
@@ -259,7 +316,7 @@ class AgentCore(
         val history = conversation.messages.toList()
         val sysExtra = history.filter { it.role == ChatMessage.Role.SYSTEM }
             .joinToString("\n") { it.content }
-        val memoryPrompt = runCatching { memoryPromptProvider() }.getOrDefault("")
+                val memoryPrompt = runCatching { memoryPromptProvider(conversation) }.getOrDefault("")
         // ⭐ 压缩：跳过已总结进摘要的旧消息，并注入摘要 SYSTEM 消息
         val rest = history
             .drop(comp.count.coerceIn(0, history.size))

@@ -20,8 +20,12 @@ class ToolRegistry(
 
         var askUserHandler: (suspend (question: String, options: String) -> String)? = null
 
-    /** ⭐ 终端会话绑定：返回"当前对话 id"，让 AI 终端工具与该对话的终端 UI 共享同一常驻会话 */
+        /** ⭐ 终端会话绑定：返回"当前对话 id"，让 AI 终端工具与该对话的终端 UI 共享同一常驻会话 */
     var convIdProvider: (() -> String)? = null
+
+    /** ⭐ 第五轮 #4：项目记忆绑定——返回"当前对话所属项目 id"（空串=未归入项目），供 project_memory 工具用 */
+    var projectIdProvider: (() -> String)? = null
+
 
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -55,21 +59,32 @@ class ToolRegistry(
         // 网络
         register(WebSearchTool())
         register(FetchUrlTool())
-                // 终端（⭐ 按对话隔离：与终端 UI 共享同一常驻会话，历史保留除非 clear）
+                        // 终端（⭐ 按对话隔离：与终端 UI 共享同一常驻会话，历史保留除非 clear）
         register(TerminalExecTool(context, settings) { convIdProvider?.invoke().orEmpty() })
         register(TerminalReadTool({ convIdProvider?.invoke().orEmpty() }, context, settings))
+        // ⭐ v1.2.0-next #5：后台终端工具
+        register(TerminalReadBgTool({ convIdProvider?.invoke().orEmpty() }, context, settings))
+        register(TerminalWaitTool({ convIdProvider?.invoke().orEmpty() }, context, settings))
+        register(TerminalListBgTool({ convIdProvider?.invoke().orEmpty() }, context, settings))
         // 无障碍
         register(AccessibilityTool())
         // 定时任务
         register(SchedulerTool(context))
         register(ListTasksTool(context))
         register(CancelTaskTool(context))
-        // 记忆
+                // 记忆
         register(SaveMemoryTool(memory))
         register(ReadMemoryTool(memory))
         register(ListMemoryTool(memory))
-        // 交互
+        register(DeleteMemoryTool(memory))
+                // 交互
         register(AskUserTool { q, o -> askUserHandler?.invoke(q, o) ?: "（当前没有可用的用户界面，无法提问）" })
+                // ⭐ 第五轮 Bug 3：多模态工具（文生图 / 语音生成 / 识图）
+        register(GenerateImageTool())
+        register(GenerateSpeechTool())
+        register(AnalyzeImageTool())
+        // ⭐ 第五轮 #4：项目记忆工具（AI 可增删改查当前项目独立记忆）
+        register(ProjectMemoryTool(memory) { projectIdProvider?.invoke().orEmpty() })
     }
 
     suspend fun execute(call: ToolCall): ToolResult {
@@ -139,6 +154,67 @@ class ListMemoryTool(private val store: MemoryStore) : ToolExecutor {
         return all.entries.joinToString("\n\n") { (k, v) ->
             val brief = if (v.length > 200) v.take(200) + "..." else v
             "[$k]\n$brief"
+        }
+    }
+}
+
+class DeleteMemoryTool(private val store: MemoryStore) : ToolExecutor {
+    override val name = "delete_memory"
+    override suspend fun execute(args: JsonObject): String {
+        val key = args.requireStr("key", "记忆标识，与 save/read_memory 的 key 一致")
+        val existed = store.read(key) != null
+        val ok = store.delete(key)
+        return if (ok) "✅ 已删除记忆 [$key]"
+        else if (existed) "❌ 删除记忆 [$key] 失败"
+        else "⚠️ 记忆 [$key] 不存在（无需删除）"
+    }
+}
+
+/**
+ * ⭐ 第五轮 #4：项目记忆工具——管理「当前对话所属项目」的独立记忆。
+ * 单工具多动作（action = list / save / read / delete），避免工具数量膨胀。
+ * projectIdProvider 返回当前对话的 projectId（空串 = 未归入项目 → 友好提示先去建项目并归入）。
+ */
+class ProjectMemoryTool(
+    private val store: MemoryStore,
+    private val projectId: () -> String,
+) : ToolExecutor {
+    override val name = "project_memory"
+
+    override suspend fun execute(args: JsonObject): String {
+        val pid = projectId()
+        if (pid.isBlank()) {
+            return "⚠️ 当前对话不属于任何项目，无法使用项目记忆。" +
+                "请先在「设置 → 对话管理 → 项目管理」里建项目，并把本对话归入该项目。"
+        }
+        return when (val action = args.strAny("action", "op", def = "list").lowercase()) {
+            "list" -> {
+                val all = store.projectMemoryList(pid)
+                if (all.isEmpty()) "当前项目（$pid）还没有任何项目记忆"
+                else all.entries.joinToString("\n\n") { (k, v) ->
+                    val brief = if (v.length > 300) v.take(300) + "..." else v
+                    "[$k]\n$brief"
+                }
+            }
+            "save", "add", "set", "write" -> {
+                val key = args.requireStr("key", "项目记忆标识，英文短词，例如 goal")
+                val content = args.str("content")
+                store.saveProjectMemory(pid, key, content)
+                "✅ 已写入项目记忆 [$key]（${content.length} 字符）"
+            }
+            "read", "get" -> {
+                val key = args.requireStr("key", "项目记忆标识")
+                store.readProjectMemory(pid, key) ?: "项目记忆里没有 [$key]"
+            }
+            "delete", "remove", "del" -> {
+                val key = args.requireStr("key", "项目记忆标识")
+                val existed = store.readProjectMemory(pid, key) != null
+                val ok = store.deleteProjectMemory(pid, key)
+                if (ok) "✅ 已删除项目记忆 [$key]"
+                else if (existed) "❌ 删除项目记忆 [$key] 失败"
+                else "⚠️ 项目记忆 [$key] 不存在（无需删除）"
+            }
+            else -> "❌ 未知 action：$action（可选 list / save / read / delete）"
         }
     }
 }

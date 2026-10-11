@@ -61,18 +61,25 @@ class OpenAIMultimodal(
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
-    override suspend fun generateImage(prompt: String, size: String): MultimodalProvider.ImageResult =
+        override suspend fun generateImage(prompt: String, size: String): MultimodalProvider.ImageResult =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
-                // 2026 年 9 月：GPT-Image-2.5，Flare 速度优先 / Sunburst 精度优先
                 put("model", "gpt-image-2.5-flare")
                 put("prompt", prompt)
                 put("n", 1)
                 put("size", size)
                 put("response_format", "b64_json")
             }
+            // ⭐ 端点智能判断：baseUrl 已填完整 images 端点就直接用；
+            // 含 /chat/completions 则剥掉再拼 /images/generations；其余情况拼 /images/generations
+            val base = baseUrl.trimEnd('/')
+            val imgUrl = when {
+                base.endsWith("/images/generations") -> base
+                base.endsWith("/chat/completions")   -> base.removeSuffix("/chat/completions") + "/images/generations"
+                else                                 -> base + "/images/generations"
+            }
             val req = Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/images/generations")
+                .url(imgUrl)
                 .header("Authorization", "Bearer $apiKey")
                 .post(body.toString().toRequestBody(JSON))
                 .build()
@@ -126,12 +133,13 @@ class OpenAIMultimodal(
             }
         }
 
-    override suspend fun textToSpeech(text: String, voice: String): ByteArray =
+        override suspend fun textToSpeech(text: String, voice: String): ByteArray =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
                 put("model", "tts-1")
                 put("input", text.take(4096))
-                put("voice", voice)
+                // ⭐ 第五轮：voice 为空（默认）时兜底 OpenAI 的 alloy
+                put("voice", voice.ifBlank { "alloy" })
             }
             val req = Request.Builder()
                 .url("${baseUrl.trimEnd('/')}/audio/speech")
@@ -381,6 +389,186 @@ class QwenMultimodal(
 }
 
 /**
+ * MiMo TTS（小米 MiMo 语音合成）。
+ * 走 OpenAI 兼容 chat/completions，body 带 messages（assistant 放正文）+ audio:{format,voice}，
+ * 取 choices[0].message.audio.data（base64）解码返回 wav 字节（24kHz PCM16LE mono）。
+ *
+ * 预置音色：mimo_default / 冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean
+ *
+ * ⚠️ V2.5 系列将于 2026.10.21 迁移到 V2.6，届时 model id 会失效；
+ * model 通过构造函数外部传入（由 SettingsRepository 用 cfg.model 或默认 mimo-v2.5-tts），无需改代码。
+ */
+class MimoMultimodal(
+    override val name: String,
+    private val baseUrl: String = "https://api.xiaomimimo.com/v1",
+    private val apiKey: String,
+    /** 模型 ID：默认 mimo-v2.5-tts；V2.6 迁移时外部传 mimo-v2.6-tts 即可 */
+    private val model: String = "mimo-v2.5-tts",
+        /** 默认音色（留空 / 传非法音色时兜底）。默认「冰糖」：MiMo 中国集群预置默认中文女声，读中文最自然 */
+    private val defaultVoice: String = "冰糖",
+) : MultimodalProvider {
+
+        private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .build()
+
+    /** MiMo V2.5 预置音色白名单（v2.5 文档）；传入非法音色（如 OpenAI 的 alloy）会 400，须兜底 */
+    private val VALID_VOICES = setOf(
+        "mimo_default", "冰糖", "茉莉", "苏打", "白桦",
+        "Mia", "Chloe", "Milo", "Dean",
+    )
+
+    override suspend fun textToSpeech(text: String, voice: String): ByteArray =
+        withContext(Dispatchers.IO) {
+            // ⭐ 第五轮 Bug 4（根因）：MiMo 只认预置音色。外部传入的 voice 若不是 MiMo 合法音色
+            // （比如 OpenAI 默认 "alloy"），直接发会 HTTP 400 → 朗读无声。这里校验白名单，非法/空 → 兜底 defaultVoice。
+            val requested = voice.ifBlank { defaultVoice }
+            val v = if (requested in VALID_VOICES) requested else defaultVoice
+            val body = buildJsonObject {
+                put("model", model)
+                put("messages", buildJsonArray {
+                    add(buildJsonObject {
+                        put("role", "assistant")
+                        put("content", text.take(4096))
+                    })
+                })
+                put("audio", buildJsonObject {
+                    put("format", "wav")
+                    put("voice", v)
+                })
+            }
+                        // ⭐ 端点归一化：baseUrl 可能带/不带 /v1、甚至填了完整 /chat/completions，统一收敛
+            val b = baseUrl.trimEnd('/')
+            val url = when {
+                b.endsWith("/chat/completions") -> b
+                b.endsWith("/v1") -> "$b/chat/completions"
+                else -> "$b/v1/chat/completions"
+            }
+            val req = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $apiKey")
+                .post(body.toString().toRequestBody(JSON))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val respText = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw IllegalStateException("MiMo TTS HTTP ${resp.code}（voice=$v, url=$url）: ${respText.take(300)}")
+                val root = json.parseToJsonElement(respText).jsonObject
+                val b64 = root["choices"]?.jsonArray?.firstOrNull()
+                    ?.jsonObject?.get("message")?.jsonObject
+                    ?.get("audio")?.jsonObject
+                    ?.get("data")?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (b64.isEmpty()) throw IllegalStateException("MiMo TTS 响应缺少 choices[0].message.audio.data")
+                android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            }
+        }
+
+    // MiMo 目前只提供 TTS，不支持文生图 / 识图 / ASR
+    override suspend fun generateImage(prompt: String, size: String): MultimodalProvider.ImageResult =
+        MultimodalProvider.ImageResult(false, error = "MiMo 不支持文生图")
+
+    override suspend fun visionChat(imageBase64: String, question: String): String =
+        throw IllegalStateException("MiMo 不支持识图")
+
+    override suspend fun speechToText(audioBytes: ByteArray): String =
+        throw IllegalStateException("MiMo 不支持 ASR")
+
+    companion object {
+        private val JSON = "application/json; charset=utf-8".toMediaType()
+    }
+}
+
+/**
+ * 智谱 GLM-Image 文生图（国产芯片训练的自回归+扩散混合架构）。
+ * 端点：{base}/images/generations，model=glm-image，响应 data[0].url 是图片 URL（非 base64）。
+ * 需下载该 URL 再转 base64 返回，供 generate_image 工具落盘。
+ *
+ * baseUrl 容忍：用户常填成 .../v4/web_search 或 .../v4/chat/completions（复用同一个 key），
+ * 本实现自动剥离已知后缀段，归一化到版本根（.../v4）再拼 /images/generations，避免 404。
+ */
+class ZhipuImageMultimodal(
+    override val name: String,
+    private val baseUrl: String = "https://open.bigmodel.cn/api/paas/v4",
+    private val apiKey: String,
+    private val model: String = "glm-image",
+) : MultimodalProvider {
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .build()
+
+    /** 归一化智谱端点：剥掉 /web_search、/chat/completions、/images/generations 等末段，回到版本根 */
+    private fun imageEndpoint(): String {
+        val base = baseUrl.trimEnd('/')
+        val root = base
+            .substringBefore("/web_search")
+            .substringBefore("/chat/completions")
+            .substringBefore("/images/generations")
+            .trimEnd('/')
+        return root + "/images/generations"
+    }
+
+    override suspend fun generateImage(prompt: String, size: String): MultimodalProvider.ImageResult =
+        withContext(Dispatchers.IO) {
+            val body = buildJsonObject {
+                put("model", model.ifBlank { "glm-image" })
+                put("prompt", prompt)
+                // GLM-Image 支持 1:1/4:3/3:4 等；size 传推荐尺寸，非法则走默认
+                if (size.isNotBlank()) put("size", size)
+            }
+            val req = Request.Builder()
+                .url(imageEndpoint())
+                .header("Authorization", "Bearer $apiKey")
+                .post(body.toString().toRequestBody(JSON))
+                .build()
+            runCatching {
+                client.newCall(req).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) return@use MultimodalProvider.ImageResult(
+                        false, error = "GLM-Image HTTP ${resp.code}: ${text.take(300)}"
+                    )
+                    val root = json.parseToJsonElement(text).jsonObject
+                    // 响应：{ "data": [ { "url": "https://..." } ] } 或 { "url": "..." }
+                    val url = root["data"]?.jsonArray?.firstOrNull()
+                        ?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+                        ?: root["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (url.isBlank()) return@use MultimodalProvider.ImageResult(
+                        false, url = url, error = "GLM-Image 响应缺少图片 URL"
+                    )
+                    // 下载图片 URL → base64（供工具落盘 / 展示）
+                    val dlReq = Request.Builder().url(url).build()
+                    client.newCall(dlReq).execute().use { dl ->
+                        if (!dl.isSuccessful) return@use MultimodalProvider.ImageResult(
+                            false, url = url, error = "下载图片 URL 失败 HTTP ${dl.code}"
+                        )
+                        val bytes = dl.body?.bytes() ?: ByteArray(0)
+                        val b64 = android.util.Base64.encodeToString(
+                            bytes, android.util.Base64.NO_WRAP
+                        )
+                        MultimodalProvider.ImageResult(true, url = url, base64 = b64)
+                    }
+                }
+            }.getOrElse { MultimodalProvider.ImageResult(false, error = it.message ?: "GLM-Image 未知错误") }
+        }
+
+    override suspend fun visionChat(imageBase64: String, question: String): String =
+        throw IllegalStateException("智谱 GLM-Image 不支持识图")
+
+    override suspend fun textToSpeech(text: String, voice: String): ByteArray =
+        throw IllegalStateException("智谱 GLM-Image 不支持 TTS")
+
+    override suspend fun speechToText(audioBytes: ByteArray): String =
+        throw IllegalStateException("智谱 GLM-Image 不支持 ASR")
+
+    companion object {
+        private val JSON = "application/json; charset=utf-8".toMediaType()
+    }
+}
+
+/**
  * 多模态管理器。
  */
 class MultimodalManager {
@@ -407,7 +595,8 @@ class MultimodalManager {
     suspend fun vision(b64: String, q: String): String =
         visionProvider?.visionChat(b64, q) ?: throw IllegalStateException("未配置识图 Provider")
 
-    suspend fun tts(text: String, voice: String = "alloy"): ByteArray =
+        /** ⭐ 第五轮：默认 voice 传空串，由各 Provider 自行兜底（MiMo 会校验预置音色白名单，OpenAI 兜底 alloy） */
+    suspend fun tts(text: String, voice: String = ""): ByteArray =
         ttsProvider?.textToSpeech(text, voice) ?: throw IllegalStateException("未配置 TTS Provider")
 
     suspend fun asr(bytes: ByteArray): String =

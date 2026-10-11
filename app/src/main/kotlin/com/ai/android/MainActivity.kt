@@ -9,8 +9,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,16 +55,30 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
 
-        // ⭐ v1.1.0 #4：把持久化语言应用到本 Activity 的 Resources（热切换生效）
+                // ⭐ v1.1.0 #4：把持久化语言应用到本 Activity 的 Resources（热切换生效）
         runCatching { I18nManager.applyLocale(this) }
 
+                // ⭐ v1.2.0-hotfix #2：Shizuku 复检（initForApp 已在 MainApp.onCreate 注册 sticky listener，
+        //    这里幂等再调一次 + recheck 拿最新 binder/授权态）
+        runCatching {
+            com.ai.android.service.ShizukuManager.initForApp(this)
+            com.ai.android.service.ShizukuManager.recheck(this)
+        }
 
-                setContent {
-            // ⭐ 第5项：插件 THEME 能力可定制软件主题风格（默认不变，不填插件则跟随系统 + 内置配色）
+
+                                setContent {
+                        // ⭐ 第5项：插件 THEME 能力可定制软件主题风格（默认不变，不填插件则跟随系统 + 内置配色）
             val appTheme = runCatching {
                 MainApp.instance.pluginRegistry.activeAppTheme
             }.getOrDefault(AppThemeStyle.DEFAULT)
-            AiAndroidTheme(appTheme = appTheme) {
+            // ⭐ #1：主题风格实时刷新——监听 settings.revision（切主题会 bump），
+            //    revision 变化时重组重新读 themeStyle()，App 视觉即时切换，无需重进 App。
+            val settings = MainApp.instance.settings
+            val settingsRevision by settings.revision.collectAsState()
+            val stylePreset = runCatching {
+                settings.themeStyle()
+            }.getOrDefault("minimal")
+            AiAndroidTheme(appTheme = appTheme, stylePreset = stylePreset, revisionKey = settingsRevision) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
@@ -91,7 +109,14 @@ class MainActivity : ComponentActivity() {
                         composable("conversations") {
                             ConversationListScreen(vm = vm, onBack = { nav.popBackStack() })
                         }
-                        composable("settings") {
+                                                                        composable(
+                            "settings",
+                            // ⭐ v1.2.0-hotfix #1：设置页从右侧滑入，返回时反向滑出
+                            enterTransition = { slideInHorizontally { it } },
+                            exitTransition = { slideOutHorizontally { it } },
+                            popEnterTransition = { slideInHorizontally { it } },
+                            popExitTransition = { slideOutHorizontally { it } },
+                        ) {
                             SettingsScreen(vm = vm, onBack = { nav.popBackStack() })
                         }
                     }
@@ -99,7 +124,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        requestNotificationPermissionIfNeeded()
+                requestNotificationPermissionIfNeeded()
+    }
+
+    /**
+     * ⭐ v1.2.0 #1：从 Shizuku 主界面 / 设置返回时，重新检查 binder + 授权状态，
+     * 写回 SettingsRepository（卡片与 ShellTool 前缀会随之刷新）。
+     */
+        override fun onResume() {
+        super.onResume()
+        runCatching {
+            com.ai.android.service.ShizukuManager.initForApp(this)
+            com.ai.android.service.ShizukuManager.recheck(this)
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {

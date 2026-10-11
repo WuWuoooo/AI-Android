@@ -150,11 +150,18 @@ class SettingsRepository(
             return configs.firstOrNull { cap in it.capabilities }
         }
 
-        pick("IMAGE")?.let { cfg ->
-            providers.multimodal.setImage(
-                if (cfg.id == "qwen") QwenMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
-                else OpenAIMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
-            )
+                pick("IMAGE")?.let { cfg ->
+            // ⭐ 第五轮 Bug 3：智谱 GLM-Image 走专用实现（响应是 URL，需下载转 b64；端点归一化修 404）
+            val isZhipu = cfg.id == "zhipu" || cfg.baseUrl.contains("bigmodel", ignoreCase = true)
+            val isMimo = cfg.baseUrl.contains("xiaomimimo", ignoreCase = true)
+            val p: MultimodalProvider = when {
+                isZhipu -> ZhipuImageMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey,
+                    model = cfg.model.ifBlank { "glm-image" })
+                cfg.id == "qwen" -> QwenMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+                isMimo -> OpenAIMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+                else -> OpenAIMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+            }
+            providers.multimodal.setImage(p)
         } ?: providers.multimodal.setImage(null)
 
         pick("VISION")?.let { cfg ->
@@ -168,9 +175,21 @@ class SettingsRepository(
             )
         } ?: providers.multimodal.setVision(null)
 
-        pick("TTS")?.let { cfg ->
-            val p = if (cfg.id == "qwen") QwenMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
-            else OpenAIMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+                        // ⭐ 第五轮 Bug 2（加强）：TTS 绑定。
+        //  ① 优先走常规 pick("TTS")（用户勾了 TTS 能力或显式绑定）；
+        //  ② 若没选到，但存在 baseUrl 含 xiaomimimo 的 Provider（MiMo），自动绑 TTS（不依赖用户是否勾了 TTS 能力），
+        //     避免主人配了 MiMo 却没在能力里勾 TTS → 朗读走不到 MiMo。
+        val ttsCfg = pick("TTS")
+            ?: configs.firstOrNull { it.baseUrl.contains("xiaomimimo", ignoreCase = true) && it.apiKey.isNotBlank() }
+        ttsCfg?.let { cfg ->
+            val isMimo = cfg.baseUrl.contains("xiaomimimo", ignoreCase = true) ||
+                cfg.label.contains("MiMo", ignoreCase = true)
+            val p: MultimodalProvider = when {
+                isMimo -> MimoMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey,
+                    model = cfg.model.ifBlank { "mimo-v2.5-tts" })
+                cfg.id == "qwen" -> QwenMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+                else -> OpenAIMultimodal(cfg.label, cfg.baseUrl, cfg.apiKey, cfg.model)
+            }
             providers.multimodal.setTts(p)
         } ?: providers.multimodal.setTts(null)
 
@@ -206,8 +225,8 @@ class SettingsRepository(
 
     // ==================== Agent 参数 ====================
 
-                fun agentConfig(): AgentConfig = AgentConfig(
-        maxRounds = prefs.getInt(KEY_MAX_ROUNDS, 30).coerceIn(1, 100),
+                                fun agentConfig(): AgentConfig = AgentConfig(
+        maxRounds = prefs.getInt(KEY_MAX_ROUNDS, 0),
         temperature = prefs.getFloat(KEY_TEMP, 0.3f).coerceIn(0f, 2f),
         reasoningEffort = prefs.getString(KEY_REASONING, "").orEmpty(),
         systemPromptExtra = prefs.getString(KEY_PROMPT_EXTRA, "").orEmpty(),
@@ -215,7 +234,7 @@ class SettingsRepository(
         contextCompressRounds = prefs.getInt(KEY_CTX_COMPRESS, 0).coerceIn(0, 100),
     )
 
-    fun setMaxRounds(v: Int) { prefs.edit().putInt(KEY_MAX_ROUNDS, v.coerceIn(1, 100)).apply(); bump() }
+    fun setMaxRounds(v: Int) { prefs.edit().putInt(KEY_MAX_ROUNDS, v.coerceIn(0, 100)).apply(); bump() }
     fun setTemperature(v: Float) { prefs.edit().putFloat(KEY_TEMP, v.coerceIn(0f, 2f)).apply(); bump() }
     fun setReasoningEffort(v: String) { prefs.edit().putString(KEY_REASONING, v).apply(); bump() }
     fun setSystemPromptExtra(v: String) { prefs.edit().putString(KEY_PROMPT_EXTRA, v).apply(); bump() }
@@ -246,12 +265,32 @@ class SettingsRepository(
         /** 是否启用 Shizuku 提权执行（shell user uid=2000）；未授权/未装则自动回退 app 沙箱 */
     fun shizukuEnabled(): Boolean = prefs.getBoolean(KEY_SHIZUKU, false)
 
-    /** 记录 Shizuku 授权状态（设置页授权成功后调用） */
+        /** 记录 Shizuku 授权状态（设置页授权成功后调用） */
     fun setShizukuEnabled(v: Boolean) {
         if (v != shizukuEnabled()) {
             prefs.edit().putBoolean(KEY_SHIZUKU, v).apply()
             bump()
         }
+    }
+
+    // ==================== ⭐ v1.2.0-next #2：主题风格预设 ====================
+
+        /** 当前主题风格预设："native" / "minimal" / "brutal"，默认 "minimal"（现代极简易主） */
+        fun themeStyle(): String = prefs.getString(KEY_THEME_STYLE, "minimal") ?: "minimal"
+    fun setThemeStyle(v: String) {
+        prefs.edit().putString(KEY_THEME_STYLE, v).apply()
+        bump()
+    }
+
+    // ==================== ⭐ v1.2.0-next 草稿持久化（#6 崩溃保留输入框内容）====================
+
+    /** 输入框未发送的草稿（按对话 id 隔离；崩溃 / 进程被杀后重开可恢复） */
+    fun inputDraft(convId: String): String = prefs.getString("input_draft_$convId", "").orEmpty()
+
+    fun setInputDraft(convId: String, text: String) {
+        val e = prefs.edit()
+        if (text.isEmpty()) e.remove("input_draft_$convId") else e.putString("input_draft_$convId", text)
+        e.apply()
     }
 
     companion object {
@@ -275,7 +314,8 @@ class SettingsRepository(
         private const val KEY_AUTO_TITLE = "ai_auto_title_summary"
         // ⭐ v1.1.0
         private const val KEY_APP_LANGUAGE = "app_language"
-        private const val KEY_SHIZUKU = "shizuku_enabled"
+                private const val KEY_SHIZUKU = "shizuku_enabled"
+        private const val KEY_THEME_STYLE = "theme_style"
 
         val DEFAULT_CONFIGS = listOf(
             ProviderConfig(

@@ -32,6 +32,8 @@ class TerminalSession(
     companion object {
         const val MAX_LINES = 3000
         const val TAG_MARK = "__AI_DONE"
+        /** ⭐ v1.2.0-next #5：后台命令日志目录（按 pid 隔离输出） */
+        const val BG_LOG_DIR = "/sdcard/.ai_term_bg"
     }
 
     private class Line(val no: Long, val text: String)
@@ -44,6 +46,9 @@ class TerminalSession(
     private var seq = 0L
     private var cmdSeq = 0L
     private var lastReadNo = 0L  // ⭐ 记录上次 read 读到的行号（since_last 用）
+
+        /** ⭐ v1.2.0-next #5：后台任务记录 taskId -> (真实 shell pid, 日志文件) */
+        private val bgTasks = java.util.concurrent.ConcurrentHashMap<String, Pair<String, File>>()
 
     /** ⭐ 输出变更流：每次缓冲变化推送"最近 500 行"快照（replay=1，新订阅者拿到最新一帧） */
     private val _outputFlow = MutableSharedFlow<String>(
@@ -274,7 +279,7 @@ class TerminalSession(
         throw IllegalStateException("终端进程在执行期间退出，未收到结束标记")
     }
 
-    /** 执行命令（带自动重启 + 自动重试），最多 [maxAttempts] 次 */
+        /** 执行命令（带自动重启 + 自动重试），最多 [maxAttempts] 次 */
     fun exec(command: String, timeoutSec: Int, maxAttempts: Int = 2): String {
         ensureHealthy()
         var lastError: Exception? = null
@@ -295,6 +300,121 @@ class TerminalSession(
             "⏱ 命令超时（${timeoutSec}s）但仍在后台运行，稍后可用 terminal_read 查看后续输出"
         } else {
             "❌ 终端执行失败（已自动重启并重试 ${maxAttempts.coerceAtLeast(1)} 次仍失败）：${lastError?.message ?: "未知错误"}"
+        }
+    }
+
+        /**
+     * ⭐ v1.2.0-next #5：后台执行命令（立即返回 taskId，不阻塞终端串行队列）。
+     * 命令以 `nohup sh -c "..." > logfile 2>&1 & echo __BG_PID__$!` 方式后台化，
+     * 输出写入独立日志文件，后续可用 [readBgOutput] / [waitForBg] 按 taskId 读取。
+     *
+     * @return 形如 `✅ 后台任务 task=abc123\nshell_pid=45678\n日志: /sdcard/.ai_term_bg/abc123.log`
+     */
+    fun execBackground(command: String): String {
+        ensureHealthy()
+        val logDir = File(BG_LOG_DIR).apply { mkdirs() }
+                val taskId = System.nanoTime().toString().takeLast(12)
+        val logFile = File(logDir, "$taskId.log")
+        // ⭐ 用单引号包裹整条 command（sh -c 语义），命令内单引号按 shell 标准转义；
+        //    这样 command 里的空格/管道/重定向都交给内层 sh 正确解析，避免 sh -c 只取第一词。
+        val escCmd = command.replace("'", "'\\''")
+        val wrapped = "nohup sh -c '$escCmd' > '$logDir/$taskId.log' 2>&1 & echo __BG_PID__$!"
+        val result = exec(wrapped, 10)
+        val pidStr = result.lineSequence().firstOrNull { it.contains("__BG_PID__") }
+            ?.substringAfter("__BG_PID__")?.trim() ?: ""
+        if (pidStr.isBlank() || pidStr.toLongOrNull() == null) {
+            return "⚠️ 后台启动失败（未拿到 shell pid）。原始结果：\n$result"
+        }
+        bgTasks[taskId] = (pidStr to logFile)
+        return "✅ 后台任务 task=$taskId\nshell_pid=$pidStr\n日志: ${logFile.absolutePath}\n用 terminal_read_bg task=$taskId 读取输出，或 terminal_wait task=$taskId 等待结束"
+    }
+
+    /**
+     * ⭐ v1.2.0-next #5：按 taskId 读取后台命令输出（不阻塞主终端队列）。
+     * 读日志文件最近 N 行 + 检查进程是否还活着。
+     */
+    fun readBgOutput(taskId: String, lines: Int = 100): String {
+        val logDir = File(BG_LOG_DIR)
+        val entry = bgTasks[taskId]
+        val logFile = entry?.second ?: File(logDir, "$taskId.log")
+        val shellPid = entry?.first
+        if (!logFile.exists()) {
+            return "❌ 找不到 task=$taskId 的后台日志（可能已清理或 taskId 错误）"
+        }
+        val content = readLogTail(logFile, lines)
+        val aliveDesc = if (shellPid != null) {
+            val alive = runCatching {
+                val check = ProcessBuilder("sh", "-c", "kill -0 $shellPid 2>/dev/null && echo alive || echo dead").start()
+                val out = check.inputStream.bufferedReader().readText().trim()
+                check.waitFor()
+                out
+            }.getOrDefault("unknown")
+            if (alive == "alive") "运行中" else "已结束"
+        } else "未知"
+        return buildString {
+            append("=== 后台任务 task=$taskId shell_pid=${shellPid ?: "?"} 状态: $aliveDesc ===\n")
+            append(content)
+        }
+    }
+
+    private fun readLogTail(file: File, lines: Int): String {
+        return runCatching {
+            val all = file.readLines()
+            val tail = all.takeLast(lines.coerceIn(1, 500))
+            if (tail.isEmpty()) "（暂无输出）"
+            else tail.joinToString("\n")
+        }.getOrDefault("（读取日志失败）")
+    }
+
+    /**
+     * ⭐ v1.2.0-next #5：非阻塞等待——后台轮询指定任务是否结束或日志是否匹配模式。
+     * 不占用终端串行队列，在独立线程里 sleep 轮询。
+     *
+     * @param taskId 后台任务 id（execBackground 返回的）
+     * @param pattern 可选：日志里出现此模式时立即返回
+     * @param timeoutSec 最长等待秒数（默认 300）
+     */
+        suspend fun waitForBg(taskId: String, pattern: String = "", timeoutSec: Int = 300): String {
+        return withContext(Dispatchers.IO) {
+            val entry = bgTasks[taskId]
+            if (entry == null) {
+                return@withContext "❌ 找不到 task=$taskId（未在本会话中启动过）"
+            }
+            val (shellPid, logFile) = entry
+            val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+            while (System.currentTimeMillis() < deadline) {
+                val alive = runCatching {
+                    val check = ProcessBuilder("sh", "-c", "kill -0 $shellPid 2>/dev/null").start()
+                    check.waitFor() == 0
+                }.getOrDefault(false)
+                if (!alive) {
+                    val content = readLogTail(logFile, 200)
+                    return@withContext "✅ 后台任务 task=$taskId (pid=$shellPid) 已结束\n=== 完整输出 ===\n$content"
+                }
+                if (pattern.isNotBlank()) {
+                    val match = runCatching { logFile.readText().contains(pattern) }.getOrDefault(false)
+                    if (match) {
+                        val content = readLogTail(logFile, 200)
+                        return@withContext "✅ 后台任务 task=$taskId 匹配到 \"$pattern\"\n=== 当前输出 ===\n$content"
+                    }
+                }
+                Thread.sleep(1000)
+            }
+                        val content = readLogTail(logFile, 200)
+            return@withContext "⏱ 等待 task=$taskId 超时（${timeoutSec}s），命令可能仍在运行\n=== 当前输出 ===\n$content"
+        }
+    }
+
+    /** ⭐ v1.2.0-next #5：列出所有已知的后台任务（重连后可用于汇报存活状态） */
+    fun listBgTasks(): String {
+        if (bgTasks.isEmpty()) return "（当前会话没有后台任务）"
+        return bgTasks.entries.joinToString("\n") { (taskId, pair) ->
+            val (pid, logFile) = pair
+            val alive = runCatching {
+                val check = ProcessBuilder("sh", "-c", "kill -0 $pid 2>/dev/null").start()
+                check.waitFor() == 0
+            }.getOrDefault(false)
+            "task=$taskId pid=$pid ${if (alive) "运行中" else "已结束"} 日志=${logFile.name}"
         }
     }
 
@@ -335,10 +455,15 @@ class TerminalExecTool(
     override suspend fun execute(args: JsonObject): String {
         val cmd = args.requireStrAny("command", "cmd", hint = "例如 pkg install python -y")
         checkDangerousShell(cmd)
-                val convId = convIdProvider()
-        // ⭐ v1.0.0-Stable：默认 60s（旧 30s 对 pkg/pip/长 Python 偏短，易"假超时"）；上限 120s
+        val convId = convIdProvider()
         val timeout = args.int("timeout_sec", 60).coerceIn(1, 120)
-                // ⭐ 按设置：默认走完整 PTY 会话（与终端 UI 共享同一真 pty，Ctrl-C/D/Z 真信号）
+        // ⭐ v1.2.0-next #5：background=true 时后台立即返回 taskId，不阻塞串行队列
+        val background = args.bool("background", false)
+        if (background) {
+            val sess = TerminalSessionManager.get(convId, context, settings)
+            return withContext(Dispatchers.IO) { sess.execBackground(cmd) }
+        }
+        // ⭐ 按设置：默认走完整 PTY 会话（与终端 UI 共享同一真 pty，Ctrl-C/D/Z 真信号）
         if (settings?.terminalUsePty() != false) {
             return PtySessionManager.get(convId, context).exec(cmd, timeout)
         }
@@ -347,6 +472,53 @@ class TerminalExecTool(
             val sess = TerminalSessionManager.get(convId, context, settings)
             sess.exec(cmd, timeout)
         }
+    }
+}
+
+/** ⭐ v1.2.0-next #5：按 taskId 读后台命令输出（不阻塞主终端队列） */
+class TerminalReadBgTool(
+    private val convIdProvider: () -> String,
+    private val context: Context?,
+    private val settings: SettingsRepository?,
+) : ToolExecutor {
+    override val name = "terminal_read_bg"
+    override suspend fun execute(args: JsonObject): String {
+        val convId = convIdProvider()
+        val taskId = args.requireStr("task", "后台任务 id（terminal_exec background=true 返回的）")
+        val lines = args.int("lines", 100)
+        val sess = TerminalSessionManager.get(convId, context, settings)
+        return withContext(Dispatchers.IO) { sess.readBgOutput(taskId, lines) }
+    }
+}
+
+/** ⭐ v1.2.0-next #5：非阻塞等待后台任务结束或日志匹配模式 */
+class TerminalWaitTool(
+    private val convIdProvider: () -> String,
+    private val context: Context?,
+    private val settings: SettingsRepository?,
+) : ToolExecutor {
+    override val name = "terminal_wait"
+    override suspend fun execute(args: JsonObject): String {
+        val convId = convIdProvider()
+        val taskId = args.requireStr("task", "后台任务 id（terminal_exec background=true 返回的）")
+        val pattern = args.str("pattern", "")
+        val timeout = args.int("timeout_sec", 300).coerceIn(1, 600)
+        val sess = TerminalSessionManager.get(convId, context, settings)
+        return sess.waitForBg(taskId, pattern, timeout)
+    }
+}
+
+/** ⭐ v1.2.0-next #5：列出当前会话所有后台任务状态 */
+class TerminalListBgTool(
+    private val convIdProvider: () -> String,
+    private val context: Context?,
+    private val settings: SettingsRepository?,
+) : ToolExecutor {
+    override val name = "terminal_list_bg"
+    override suspend fun execute(args: JsonObject): String {
+        val convId = convIdProvider()
+        val sess = TerminalSessionManager.get(convId, context, settings)
+        return withContext(Dispatchers.IO) { sess.listBgTasks() }
     }
 }
 

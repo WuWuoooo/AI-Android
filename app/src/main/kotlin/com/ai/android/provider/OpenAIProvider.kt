@@ -169,7 +169,11 @@ class OpenAIProvider(
             fn?.get("arguments")?.jsonPrimitive?.contentOrNull?.let { p.args.append(it) }
         }
 
-        val fin = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+                val fin = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+        if (fin != null && fin.isNotEmpty()) {
+            // ⭐ v1.2.0 #2：发 finish_reason 事件（"stop" / "length" / "tool_calls" / "content_filter"）
+            scope.trySend(StreamEvent.FinishInfo(fin))
+        }
         if (fin == "tool_calls") flushToolCalls(scope, partials)
 
         root["usage"]?.let { u ->

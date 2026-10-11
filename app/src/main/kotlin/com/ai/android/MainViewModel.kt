@@ -58,8 +58,12 @@ class MainViewModel(private val app: MainApp) : ViewModel() {
     private val _attachedImages = MutableStateFlow<List<String>>(emptyList())
     val attachedImages: StateFlow<List<String>> = _attachedImages
 
-    private val _memoryList = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+        private val _memoryList = MutableStateFlow<List<Pair<String, String>>>(emptyList())
     val memoryList: StateFlow<List<Pair<String, String>>> = _memoryList
+
+    /** ⭐ 第五轮 #4：当前选中项目的项目记忆列表（设置页「项目管理」卡片用） */
+    private val _projectMemoryList = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    val projectMemoryList: StateFlow<List<Pair<String, String>>> = _projectMemoryList
 
     private val _quotedMessage = MutableStateFlow<ChatMessage?>(null)
     val quotedMessage: StateFlow<ChatMessage?> = _quotedMessage
@@ -89,30 +93,68 @@ class MainViewModel(private val app: MainApp) : ViewModel() {
     val providerManager get() = app.providerManager
     val projects get() = app.projectStore.projects
 
-                init {
+                        init {
         app.toolRegistry.askUserHandler = { question, options -> askUser(question, options) }
         // ⭐ 终端会话按对话绑定：AI 的 terminal_exec / terminal_read 使用当前对话的常驻会话
         app.toolRegistry.convIdProvider = { current.value?.id.orEmpty() }
+        // ⭐ 第五轮 #4：项目记忆按对话绑定——AI 的 project_memory 作用于当前对话所属项目
+        app.toolRegistry.projectIdProvider = { current.value?.projectId.orEmpty() }
         app.agentStopCallback = { stop() }
+        // ⭐ v1.2.0 #7.2：注册到跨界面消息桥，让悬浮窗（FloatingService）能直接发消息 / 暂停
+        AgentBridge.setViewModel(this)
         val bootstrap = Conversation(id = UUID.randomUUID().toString(), title = "新会话")
         _conversations.value = listOf(bootstrap)
         _current.value = bootstrap
 
-        viewModelScope.launch {
+                viewModelScope.launch {
             runCatching { app.projectStore.init(); refreshMemoryList() }
+            // ⭐ #7 长对话秒开：先只读元信息（meta，不读 payload）→ 列表立即可用、进入软件不卡；
+            //    再切到 IO 后台逐个分块填充 payload（消息正文），填完后再 #10 合并空对话。
             try {
-                val loaded = loadConversations()
-                Log.d(TAG, "loaded ${loaded.size} conversations from DB")
-                if (loaded.isNotEmpty()) {
-                    _conversations.value = loaded
-                    _current.value = loaded.first()
+                val metas = withContext(Dispatchers.IO) { app.database.conversationDao().allMeta() }
+                                if (metas.isNotEmpty()) {
+                    _conversations.value = metas.map {
+                        Conversation(id = it.id, title = it.title,
+                            createdAt = it.createdAt, updatedAt = it.updatedAt, projectId = it.projectId)
+                    }
+                    _current.value = _conversations.value.firstOrNull()
                     bump()
                 }
+                if (metas.isNotEmpty()) {
+                    // 后台逐个填 payload（IO，不阻塞 UI）；当前对话填充时同步刷新 _current
+                    viewModelScope.launch(Dispatchers.IO) {
+                        var filled = 0
+                        for (meta in metas) {
+                            val full = runCatching { loadOneConversation(meta.id) }.getOrNull() ?: continue
+                            filled++
+                            _conversations.value = _conversations.value.map { if (it.id == full.id) full else it }
+                            if (_current.value?.id == full.id) _current.value = full
+                        }
+                        Log.d(TAG, "filled $filled/${metas.size} conversation payloads in background")
+                        mergeEmptyConversations()   // ⭐ #10：填充后合并无内容的空对话
+                        bump()
+                    }
+                }
             } catch (e: Throwable) {
-                // ⭐ 不再静默吞错：记录 + 提示，方便定位
                 Log.e(TAG, "loadConversations 失败", e)
                 _loadError.value = "加载历史对话失败：${e.message ?: e.javaClass.simpleName}"
             }
+        }
+    }
+
+    /**
+     * ⭐ #10 新对话自动清除：把「没有消息」的空对话合并保留一个（标题为「新会话」），
+     * 其余空对话从列表删除 + 清 DB。避免大量空对话堆积。
+     */
+    fun mergeEmptyConversations() {
+        val empties = _conversations.value.filter { it.messages.isEmpty() }
+        if (empties.size <= 1) return
+        // 保留第一个（或保留当前如果是空的），其余删除
+        val keep = if (_current.value in empties) _current.value!! else empties.first()
+        val toRemove = empties.filter { it.id != keep.id }
+        _conversations.value = _conversations.value.filterNot { it.id in toRemove.map { r -> r.id } }
+        toRemove.forEach { c ->
+            app.appScope.launch { runCatching { app.database.conversationDao().delete(c.id) } }
         }
     }
 
@@ -410,11 +452,31 @@ class MainViewModel(private val app: MainApp) : ViewModel() {
         runCatching { FloatingService.setTokenText(app, "") }
     }
 
-    // ==================== 记忆 ====================
+        // ==================== 记忆 ====================
 
     fun refreshMemoryList() { _memoryList.value = app.memory.list().toList() }
     fun saveMemory(key: String, content: String) { app.memory.save(key, content); refreshMemoryList() }
     fun deleteMemory(key: String) { app.memory.delete(key); refreshMemoryList() }
+
+    // ==================== ⭐ 第五轮 #4：项目记忆（每项目独立）====================
+
+    /** 刷新某项目的记忆列表（设置页切换项目时调） */
+    fun refreshProjectMemory(projectId: String) {
+        _projectMemoryList.value = if (projectId.isBlank()) emptyList()
+        else app.memory.projectMemoryList(projectId).toList()
+    }
+
+    fun saveProjectMemory(projectId: String, key: String, content: String) {
+        if (projectId.isBlank() || key.isBlank()) return
+        app.memory.saveProjectMemory(projectId, key, content)
+        refreshProjectMemory(projectId)
+    }
+
+    fun deleteProjectMemory(projectId: String, key: String) {
+        if (projectId.isBlank()) return
+        app.memory.deleteProjectMemory(projectId, key)
+        refreshProjectMemory(projectId)
+    }
 
         // ==================== 引用 ====================
 
@@ -690,10 +752,10 @@ class MainViewModel(private val app: MainApp) : ViewModel() {
                         }
                         bump()
                     }
-                    is AgentEvent.ToolStart, is AgentEvent.ToolEnd, is AgentEvent.ToolMessage -> {
+                                        is AgentEvent.ToolEnd, is AgentEvent.ToolMessage -> {
                         persist(conv); bump()
                     }
-                                        is AgentEvent.Stats -> {
+                                                            is AgentEvent.Stats -> {
                         val lastId = conv.messages.lastOrNull { it.role == ChatMessage.Role.ASSISTANT }?.id ?: ""
                         updateMessage(conv, lastId) { it.copy(tokenStats = ev.stats) }
                         bump()
@@ -705,11 +767,38 @@ class MainViewModel(private val app: MainApp) : ViewModel() {
                                 "Token: 输入 ${total.promptTokens} / 输出 ${total.completionTokens} / 缓存 ${total.cacheHitTokens} / 共 ${total.totalTokens}",
                             )
                         }
+                        // ⭐ v1.2.0 #7.1：向 JS 插件广播 OnTokenUpdate 事件
+                        runCatching {
+                            app.jsPluginRuntime.pushEventAll(
+                                "{\"type\":\"OnTokenUpdate\",\"payload\":{\"prompt\":${total.promptTokens}," +
+                                "\"completion\":${total.completionTokens},\"cache\":${total.cacheHitTokens}," +
+                                "\"total\":${total.totalTokens}}}"
+                            )
+                        }
                     }
                     is AgentEvent.State -> {
                         _agentState.value = ev.state
                         if (app.settings.floatingEnabled()) {
                             runCatching { FloatingService.update(ev.state) }
+                        }
+                        // ⭐ v1.2.0 #7.1：向 JS 插件广播 OnAgentState 事件
+                        runCatching {
+                            app.jsPluginRuntime.pushEventAll(
+                                "{\"type\":\"OnAgentState\",\"payload\":{\"state\":\"${ev.state.status.name}\"," +
+                                "\"tool\":\"${ev.state.currentTool}\",\"progress\":\"${ev.state.progressText}\"}}"
+                            )
+                        }
+                    }
+                                        is AgentEvent.ToolStart -> {
+                        persist(conv); bump()
+                        // ⭐ v1.2.0 #7.1：向 JS 插件广播 OnToolCall 事件
+                        //    JsonPrimitive().toString() 输出带引号且已转义的 JSON 字符串，可直接拼进 payload
+                        runCatching {
+                            val argsJson = kotlinx.serialization.json.JsonPrimitive(ev.call.arguments.take(200)).toString()
+                            val toolJson = kotlinx.serialization.json.JsonPrimitive(ev.call.name).toString()
+                            app.jsPluginRuntime.pushEventAll(
+                                "{\"type\":\"OnToolCall\",\"payload\":{\"tool\":$toolJson,\"args\":$argsJson}}"
+                            )
                         }
                     }
                     is AgentEvent.Error -> {

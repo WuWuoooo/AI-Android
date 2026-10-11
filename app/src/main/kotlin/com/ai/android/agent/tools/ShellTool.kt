@@ -39,8 +39,10 @@ class ShellTool : ToolExecutor {
         checkDangerousShell(command)
         val timeout = args.int("timeout_sec", 15).coerceIn(1, 60)
 
-        // ⭐ v1.1.0 #2：优先走 Shizuku（shell uid 2000，突破 app 沙箱读写 Android/data）；
+                // ⭐ v1.1.0 #2：优先走 Shizuku（shell uid 2000，突破 app 沙箱读写 Android/data）；
         //    未装/未授权时 ShizukuManager.executeShell 自动回退 app 沙箱本地 sh，并带提示前缀。
+        // ⭐ v1.2.0-next #5 有效反馈：Shizuku(uid 2000) 与 Termux(u0_a348) 是不同 uid 沙箱，
+        //    涉及 Termux 内部目录（/data/data/com.termux）必须走 terminal_exec，杀 Termux 进程同理。
         val out = runCatching {
             com.ai.android.service.ShizukuManager.executeShell(
                 com.ai.android.MainApp.instance, command, timeout,

@@ -14,6 +14,13 @@ sealed class StreamEvent {
     data class ToolCalls(val calls: List<ToolCall>) : StreamEvent()
     data class Stats(val stats: TokenStats) : StreamEvent()
     data class Error(val msg: String) : StreamEvent()
+    /**
+     * ⭐ v1.2.0 #2：流式结束原因（模型停止类型）。
+     * - OpenAI: "stop" / "length"(max_tokens) / "tool_calls" / "content_filter"
+     * - Anthropic: "end_turn" / "max_tokens" / "stop_sequence" / "tool_use"
+     * AgentCore 据此判断是否截断。
+     */
+    data class FinishInfo(val reason: String) : StreamEvent()
     object Done : StreamEvent()
 }
 

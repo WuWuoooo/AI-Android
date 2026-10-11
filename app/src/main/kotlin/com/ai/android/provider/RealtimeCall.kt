@@ -46,15 +46,37 @@ class PcmRecorder(private val sampleRate: Int = 16000) {
     private val buf = ByteArray(3200)
     private val buffer = java.io.ByteArrayOutputStream()
 
-    fun start() {
+            /** ⭐ v1.2.0-hotfix #1：start() 是否真正成功（AudioRecord 可初始化且开始录音）。
+     *  调用方据此判断「录音启动失败」，避免静默失败。通话模块不检查则行为不变。 */
+    @Volatile var ready: Boolean = false
+        private set
+
+                        fun start() {
         val min = AudioRecord.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(3200)
-        rec = AudioRecord(
-            MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, min
-        )
-        rec?.startRecording()
+        val r = runCatching {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, min
+            )
+        }.getOrNull()
+        ready = false
+        if (r == null || r.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { r?.release() }
+            rec = null
+            return
+        }
+        // ⭐ SDK stub 里 startRecording() 返回 void（Unit），不检查返回值，用 try/catch 判断是否启动成功
+        try {
+            r.startRecording()
+            rec = r
+            ready = true
+        } catch (e: Exception) {
+            runCatching { r.release() }
+            rec = null
+            ready = false
+        }
     }
 
     /** 把当前可用的 PCM 累积进内部 buffer（语音模式用） */

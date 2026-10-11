@@ -34,8 +34,8 @@ data class FloatingStyle(
     val ballBg: Int = 0xFF2563EB.toInt(),
     /** 默认悬浮球文字 */
     val ballText: Int = 0xFFFFFFFF.toInt(),
-    /** 面板圆角 dp */
-    val cornerRadius: Int = 14,
+        /** 面板圆角 dp */
+    val cornerRadius: Int = 18,
     /** 面板标题文字（覆盖 "AI 助手"） */
     val panelTitle: String = "AI 助手",
     /** 悬浮球文字（覆盖 "AI"） */

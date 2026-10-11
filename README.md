@@ -63,7 +63,7 @@ app/
 
 ## 版本
 
-当前版本：`1.1.0`（versionCode 8）
+当前版本：`1.2.0`（versionCode 9）
 
 ## License
 

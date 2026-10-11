@@ -7,7 +7,11 @@ import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -27,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ai.android.model.ChatMessage
 import com.ai.android.model.ToolResult
+import com.ai.android.ui.components.AppMenuPanel
+import com.ai.android.ui.components.AppMenuItem
 import com.ai.android.plugin.ChatBubbleStyle
 import com.ai.android.util.MarkdownText
 import java.io.File
@@ -221,44 +227,46 @@ private fun UserBubble(
             }
         }
 
-        // ⭐ 长按操作菜单（与输入框左侧加号菜单风格一致）
-        Box {
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                DropdownMenuItem(
-                    text = { Text("修改", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Edit, null, Modifier.size(16.dp)) },
-                    onClick = {
-                        showMenu = false; editOpen = true
-                        editText = displayContentOverride ?: extractUserDisplayContent(message.content)
+                                                // ⭐ 第五轮 #1/#8：长按操作菜单改 material3 DropdownMenu
+        // （overlay 浮层不挤占布局 + 内建展开/收起过渡动画 + 锚定气泡附近，替代旧 Box+matchParentSize 撑高 item）
+                // ⭐ material3 1.3.0 DropdownMenu 没有 containerColor 直传参数（须用 DropdownMenuDefaults.colors），
+        //    用默认色（已是 surface）最稳，避免编译报错
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.widthIn(min = 150.dp),
+            content = {
+                AppMenuPanel(
+                    items = listOf(
+                        AppMenuItem(label = "修改", icon = Icons.Default.Edit),
+                        AppMenuItem(label = "删除", icon = Icons.Default.Delete),
+                        AppMenuItem(label = "多选", icon = Icons.Default.CheckCircle),
+                        AppMenuItem(label = "复制", icon = Icons.Default.ContentCopy),
+                        AppMenuItem(label = "选择文本", icon = Icons.Default.TextFields),
+                    ),
+                    onPick = { idx ->
+                        when (idx) {
+                            0 -> {
+                                showMenu = false; editOpen = true
+                                editText = displayContentOverride ?: extractUserDisplayContent(message.content)
+                            }
+                            1 -> { showMenu = false; confirmDelete = true }
+                            2 -> { showMenu = false; onEnterMultiSelect() }
+                            3 -> {
+                                showMenu = false
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("ai", displayText))
+                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                            }
+                            4 -> { showMenu = false; selectingText = true }
+                        }
                     },
+                    chrome = false,
+                    title = "操作",
                 )
-                DropdownMenuItem(
-                    text = { Text("删除", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Delete, null, Modifier.size(16.dp)) },
-                    onClick = { showMenu = false; confirmDelete = true },
-                )
-                                DropdownMenuItem(
-                    text = { Text("多选", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.CheckCircle, null, Modifier.size(16.dp)) },
-                    onClick = { showMenu = false; onEnterMultiSelect() },
-                )
-                DropdownMenuItem(
-                    text = { Text("复制", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp)) },
-                    onClick = {
-                        showMenu = false
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("ai", displayText))
-                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("选择文本", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.TextFields, null, Modifier.size(16.dp)) },
-                    onClick = { showMenu = false; selectingText = true },
-                )
-            }
-        }
+            },
+        )
 
         // ⭐ 修改对话框（草稿：退出软件或切换对话即清除，不落盘）
         if (editOpen) {
@@ -439,7 +447,7 @@ private fun AssistantToolbar(
     onRetry: () -> Unit,
     onContinue: () -> Unit,
 ) {
-    var showMore by remember { mutableStateOf(false) }
+                        var showMore by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -450,23 +458,30 @@ private fun AssistantToolbar(
         ToolbarBtn("朗读", Icons.Default.VolumeUp, onSpeak)
         ToolbarBtn("复制", Icons.Default.ContentCopy, onCopy)
         ToolbarBtn("重新生成", Icons.Default.Refresh, onRetry)
+        // ⭐ 第五轮：「更多」改 material3 DropdownMenu（锚定本按钮右下角 + 浮层不挤占 + 内建展开/收起动画 + wrap 不过长）
         Box {
-            ToolbarBtn("更多", Icons.Default.MoreHoriz) { showMore = true }
-            DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
-                if (showContinue) {
-                    DropdownMenuItem(
-                        text = { Text("▶ 继续生成", fontSize = 13.sp) },
-                        onClick = { showMore = false; onContinue() },
+            ToolbarBtn("更多", Icons.Default.MoreHoriz) { showMore = !showMore }
+                                                DropdownMenu(
+                expanded = showMore,
+                onDismissRequest = { showMore = false },
+                modifier = Modifier.widthIn(min = 120.dp),
+                shape = RoundedCornerShape(10.dp),
+                content = {
+                    AppMenuPanel(
+                        items = if (showContinue) {
+                            listOf(AppMenuItem(label = "▶ 继续生成"))
+                        } else {
+                            listOf(AppMenuItem(label = "（无更多操作）", enabled = false))
+                        },
+                        onPick = { _ ->
+                            showMore = false
+                            if (showContinue) onContinue()
+                        },
+                        chrome = false,
+                        title = "更多操作",
                     )
-                }
-                if (!showContinue) {
-                    DropdownMenuItem(
-                        text = { Text("（无更多操作）", fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        onClick = { showMore = false },
-                    )
-                }
-            }
+                },
+            )
         }
     }
 }
